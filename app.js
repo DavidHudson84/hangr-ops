@@ -71,6 +71,7 @@ function buildNav() {
   if (isAdmin()) links.push(['#/group', 'Group']);
   myStores().filter(s => s.active).forEach(s => links.push([`#/store/${s.code}`, s.name]));
   if (isAdmin() || myStores().length) links.push(['#/customers', 'Customers']);
+  if (isAdmin()) links.push(['#/marketing', 'Marketing']);
   if (canUpload()) links.push(['#/upload', 'Upload']);
   if (isAdmin()) links.push(['#/admin', 'Admin']);
   $('#nav').innerHTML = links.map(([h, t]) => `<a href="${h}">${esc(t)}</a>`).join('');
@@ -161,10 +162,11 @@ function withRolling(series, key) {
 /* ---------- routing ---------- */
 function route() {
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === location.hash));
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', location.hash === a.getAttribute('href') || location.hash.startsWith(a.getAttribute('href') + '/')));
   const go = (fn, ...a) => fn(...a).catch(e => { app.innerHTML = `<div class="card err">Something went wrong: ${esc(e.message || e)}</div>`; console.error(e); });
   if (h[0] === 'store' && h[1]) return go(storeView, h[1], h[2]);
   if (h[0] === 'upload' && canUpload()) return go(uploadView);
+  if (h[0] === 'marketing' && isAdmin()) return go(marketingView, h[1]);
   if (h[0] === 'customers') return go(customersView, h[1] ? decodeURIComponent(h[1]) : '');
   if (h[0] === 'customer' && h[1]) return go(customerView, h[1]);
   if (h[0] === 'admin' && isAdmin()) return go(adminView);
@@ -351,9 +353,11 @@ async function customerView(id) {
     <p>${esc(c.mobile || '')} ${c.email ? '· ' + esc(c.email) : ''} ${c.account_type ? '· POS charge type ' + esc(c.account_type) : ''}</p>
     ${isAdmin() ? `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="isCom" ${c.is_commercial ? 'checked' : ''}> Account (commercial) customer: leave out of retail customer counts and marketing</label>` : ''}
   </div>
+  ${isAdmin() ? await customerMarketingCard(c) : ''}
   <div class="card"><h2>Orders <small>latest 200</small></h2><div class="scroll"><table><tr><th>Date</th><th>Time</th><th>Status</th><th>Picked up</th><th>Pieces</th><th>Total</th></tr>
     ${(orders || []).map(o => `<tr><td>${fmtD(o.order_date)}</td><td>${o.order_time ? o.order_time.slice(0, 5) : ''}</td><td>${esc(o.status || '')}</td><td>${fmtD(o.picked_up_date)}</td><td>${num(o.pieces)}</td><td>${money(o.sales, 2)}</td></tr>`).join('')}
   </table></div></div>`;
+  if (isAdmin()) wireCustomerMarketing(c);
   const cb = $('#isCom'); if (cb) cb.onchange = async () => {
     const { error } = await sb.from('customers').update({ is_commercial: cb.checked, commercial_source: 'manual' }).eq('id', id);
     if (error) alert(error.message); S.cache = {};
