@@ -70,6 +70,7 @@ function buildNav() {
   const links = [];
   if (isAdmin()) links.push(['#/group', 'Group']);
   myStores().filter(s => s.active).forEach(s => links.push([`#/store/${s.code}`, s.name]));
+  if (isAdmin() || myStores().length) links.push(['#/customers', 'Customers']);
   if (canUpload()) links.push(['#/upload', 'Upload']);
   if (isAdmin()) links.push(['#/admin', 'Admin']);
   $('#nav').innerHTML = links.map(([h, t]) => `<a href="${h}">${esc(t)}</a>`).join('');
@@ -162,6 +163,8 @@ function route() {
   const go = (fn, ...a) => fn(...a).catch(e => { app.innerHTML = `<div class="card err">Something went wrong: ${esc(e.message || e)}</div>`; console.error(e); });
   if (h[0] === 'store' && h[1]) return go(storeView, h[1], h[2]);
   if (h[0] === 'upload' && canUpload()) return go(uploadView);
+  if (h[0] === 'customers') return go(customersView, h[1] ? decodeURIComponent(h[1]) : '');
+  if (h[0] === 'customer' && h[1]) return go(customerView, h[1]);
   if (h[0] === 'admin' && isAdmin()) return go(adminView);
   if (h[0] === 'group' && isAdmin()) return go(groupView, h[1]);
   if (isAdmin()) return go(groupView);
@@ -299,6 +302,60 @@ function custTable(title, rows, cols, heads) {
   const f = (k, v) => /spend/.test(k) ? money(v) : /order$|first_order|last_order/.test(k) && typeof v === 'string' && v.includes('-') ? fmtD(v) : v ?? '–';
   return `<div class="card"><h2>${esc(title)}</h2><div class="scroll"><table><tr>${heads.map(h => `<th>${h}</th>`).join('')}</tr>
     ${(rows || []).map(r => `<tr>${cols.map(k => `<td>${esc(f(k, r[k]))}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cols.length}" class="mu">None</td></tr>`}</table></div></div>`;
+}
+
+/* ---------- customers ---------- */
+async function customersView(q) {
+  const ids = myStores().map(s => s.id);
+  app.innerHTML = `<div class="card"><h2>Customers</h2>
+    <form id="cs" class="row"><input id="cq" placeholder="Name, mobile or email" value="${esc(q)}" style="flex:1;min-width:220px">
+    <select id="cst"><option value="">All my stores</option>${myStores().map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+    <select id="ctier"><option value="">Any tier</option>${['VIP', 'Regular', 'Casual', 'Lapsed'].map(t => `<option>${t}</option>`).join('')}</select>
+    <label style="display:flex;gap:4px;align-items:center;margin:0"><input type="checkbox" id="ccom"> account customers only</label>
+    <button class="btn">Search</button></form><div id="cres" style="margin-top:10px"></div></div>`;
+  const run = async () => {
+    const t = $('#cq').value.trim();
+    let qb = sb.from('v_customers').select('id,full_name,mobile,email,store_id,tier,last_order,order_count,lifetime_spend,spend_12m,is_commercial').eq('org_id', S.org.id).in('store_id', $('#cst').value ? [$('#cst').value] : ids);
+    if (t) { const d = t.replace(/\D/g, ''); qb = d.length >= 6 ? qb.ilike('mobile', `%${d.slice(-8)}%`) : qb.or(`full_name.ilike.%${t.replace(/[,()%]/g, ' ')}%,email.ilike.%${t.replace(/[,()%]/g, ' ')}%`); }
+    if ($('#ctier').value) qb = qb.eq('tier', $('#ctier').value);
+    if ($('#ccom').checked) qb = qb.eq('is_commercial', true);
+    const { data, error } = await qb.order('spend_12m', { ascending: false }).limit(100);
+    if (error) { $('#cres').innerHTML = `<span class="err">${esc(error.message)}</span>`; return; }
+    const sn = id => S.stores.find(s => s.id === id)?.name || '';
+    $('#cres').innerHTML = `<div class="scroll"><table><tr><th>Customer</th><th>Store</th><th>Tier</th><th>Mobile</th><th>Last order</th><th>Orders</th><th>Spend 12m</th><th>Lifetime</th></tr>
+      ${data.map(c => `<tr class="click" onclick="location.hash='#/customer/${c.id}'"><td>${esc(c.full_name)} ${c.is_commercial ? '<span class="chip">account</span>' : ''}</td><td>${esc(sn(c.store_id))}</td><td>${c.tier}</td><td>${esc(c.mobile || '')}</td><td>${fmtD(c.last_order)}</td><td>${num(c.order_count)}</td><td>${money(c.spend_12m)}</td><td>${money(c.lifetime_spend)}</td></tr>`).join('') || '<tr><td colspan="8" class="mu">No matches</td></tr>'}
+    </table></div><p class="note">Showing up to 100, highest 12-month spend first.</p>`;
+  };
+  $('#cs').onsubmit = e => { e.preventDefault(); run(); };
+  run();
+}
+
+async function customerView(id) {
+  const [{ data: c }, { data: orders }] = await Promise.all([
+    sb.from('v_customers').select('*').eq('id', id).maybeSingle(),
+    sb.from('customer_orders').select('order_date,order_time,status,picked_up_date,sales,pieces').eq('customer_id', id).order('order_date', { ascending: false }).limit(200)]);
+  if (!c) { app.innerHTML = '<div class="card">Customer not found, or not in your store.</div>'; return; }
+  const gaps = []; const ds = (orders || []).map(o => o.order_date).sort();
+  for (let i = 1; i < ds.length; i++) gaps.push((new Date(ds[i]) - new Date(ds[i - 1])) / 864e5);
+  const typical = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : null;
+  app.innerHTML = `<div class="row" style="margin-bottom:12px"><a href="#/customers">‹ Customers</a></div>
+  <div class="card"><h2>${esc(c.full_name)} ${c.is_commercial ? '<span class="chip">account customer</span>' : ''} <small>${esc(S.stores.find(s => s.id === c.store_id)?.name || '')} · ${c.tier}</small></h2>
+    <div class="tiles">
+      <div class="tile"><div class="l">Lifetime spend</div><div class="v">${money(c.lifetime_spend)}</div><div class="d mu">${num(c.order_count)} orders since ${fmtD(c.first_order)}</div></div>
+      <div class="tile"><div class="l">Last 12 months</div><div class="v">${money(c.spend_12m)}</div><div class="d mu">${num(c.orders_12m)} orders</div></div>
+      <div class="tile"><div class="l">Last order</div><div class="v">${fmtD(c.last_order)}</div><div class="d mu">${c.days_since ?? '–'} days before latest data</div></div>
+      <div class="tile"><div class="l">Usual gap between orders</div><div class="v">${typical != null ? Math.round(typical) + ' days' : '–'}</div><div class="d mu">${typical && c.days_since > typical * 1.5 ? '<span class="dn">overdue</span>' : ''}</div></div>
+    </div>
+    <p>${esc(c.mobile || '')} ${c.email ? '· ' + esc(c.email) : ''} ${c.account_type ? '· POS charge type ' + esc(c.account_type) : ''}</p>
+    ${isAdmin() ? `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="isCom" ${c.is_commercial ? 'checked' : ''}> Account (commercial) customer: leave out of retail customer counts and marketing</label>` : ''}
+  </div>
+  <div class="card"><h2>Orders <small>latest 200</small></h2><div class="scroll"><table><tr><th>Date</th><th>Time</th><th>Status</th><th>Picked up</th><th>Pieces</th><th>Total</th></tr>
+    ${(orders || []).map(o => `<tr><td>${fmtD(o.order_date)}</td><td>${o.order_time ? o.order_time.slice(0, 5) : ''}</td><td>${esc(o.status || '')}</td><td>${fmtD(o.picked_up_date)}</td><td>${num(o.pieces)}</td><td>${money(o.sales, 2)}</td></tr>`).join('')}
+  </table></div></div>`;
+  const cb = $('#isCom'); if (cb) cb.onchange = async () => {
+    const { error } = await sb.from('customers').update({ is_commercial: cb.checked, commercial_source: 'manual' }).eq('id', id);
+    if (error) alert(error.message); S.cache = {};
+  };
 }
 
 /* ---------- upload ---------- */
