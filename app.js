@@ -96,6 +96,8 @@ function loginView(msg = '') {
   $('#su').onclick = async () => {
     const email = $('#em').value.trim(), password = $('#pw').value;
     if (!email || password.length < 8) { $('#lm').textContent = 'Enter your email and a password of at least 8 characters, then press Create login.'; return; }
+    const tryIn = await sb.auth.signInWithPassword({ email, password });
+    if (!tryIn.error) return boot(); // already active: just sign in
     const { error } = await sb.auth.signUp({ email, password });
     $('#lm').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Login created. Ask David to activate it, then sign in.';
   };
