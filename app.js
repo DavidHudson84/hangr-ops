@@ -426,7 +426,7 @@ async function loadFile(file, say) {
     .map(r => r.map(v => (typeof v === 'string' && v.trim() === '') ? null : v));
   const title = String(grid[0]?.[0] || '');
   const dm = String(grid[1]?.[0] || '').match(/Date:\s*(.+?)\s+to\s+(.+)$/i);
-  if (!/sales[ _]incoming/i.test(title) || !dm) throw new Error('Not a My Clean POS export (expected "SALES INCOMING" and a "Date: … to …" line at the top).');
+  if (!dm) throw new Error('Not a My Clean POS export (expected a "Date: … to …" line under the title).');
   const from = parseDate(dm[1]), to = parseDate(dm[2]);
   if (!from || !to) throw new Error(`Couldn't read the date range "${dm[0]}".`);
   const head = (grid[3] || []).map(h => String(h ?? '').trim().toLowerCase());
