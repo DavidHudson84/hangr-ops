@@ -21,3 +21,20 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 - Read policies on sales, customers, customer_orders and commentary use `store_id in (select visible_store_ids())`
   (evaluated once per query). Per-row helper calls timed out on 132k orders; don't go back to them.
   `orgs.orders_as_of` holds the latest order date (set by `refresh_customer_stats`) so `v_customers` needn't scan orders.
+
+## Marketing (module A2, built 26 Nov 2026)
+- Every SMS is a row in `sms_sends`, created only by `app.queue_sms` (renders the template, adds the
+  "- MasterDC Reply STOP to opt out." footer, checks mobile, opt-outs, do-not-contact and account customers,
+  holds back `control_pct`% as `held`). Statuses: pending (awaiting campaign approval) > queued > sending > sent/failed/suppressed.
+- Edge Function `sms-send` (pg_cron `hangr-sms-send`, every 5 min, secret header from `internal_secrets`) sends due
+  `queued` rows through Twilio only when `sms_settings.mode` is `test` (test_mobile only) or `live`, inside
+  quiet hours, never Sunday. Needs Edge Function secrets TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.
+  `sms-inbound` is the Twilio reply webhook (STOP/START, signature checked).
+- pg_cron `hangr-daily` runs `app.daily_job()` once per Melbourne day after 08:30: `run_flows` (onboarding,
+  lapsing, winback, uncollected, review; each switched on by its `campaigns` kind='flow' row being 'approved') and
+  `loyalty_prepare` (last month's $200 draw + free-order picks per loyalty_enabled store). Both refuse to act when
+  `orgs.orders_as_of` is more than 10 days old.
+- Offer calendar `offer_cycles` (six a year, variants vip/casual/lapsed, `max_days` audience window): `offer_preview`,
+  `offer_approve` (queues four quadrant waves). One-off: `campaign_preview` / `campaign_create` (pending) /
+  `campaign_approve` / `campaign_cancel`. Results: `v_sms_outcomes`, `sms_results` (orders within 30 days, sent vs held back).
+- Marketing cap: `marketing_cap_per_month` (2) marketing texts in any 30 days; flows pause 14 days either side of an offer text.
