@@ -249,7 +249,7 @@ async function storeView(code, weekSel) {
     sb.from('v_sales_week').select('service,channel,sales_gross,orders,pieces,week_end').eq('store_id', store.id).gte('week_end', addDays(wk, -84)).lte('week_end', wk),
     months(),
     sb.from('v_customers').select('full_name,mobile,lifetime_spend,spend_12m,orders_12m,last_order,tier,days_since').eq('store_id', store.id).eq('is_commercial', false).order('spend_12m', { ascending: false }).limit(15),
-    sb.from('v_customers').select('full_name,mobile,first_order,lifetime_spend,order_count').eq('store_id', store.id).eq('is_commercial', false).order('first_order', { ascending: false }).limit(15),
+    sb.from('v_customers').select('full_name,mobile,first_order,lifetime_spend,order_count').eq('store_id', store.id).eq('is_commercial', false).not('first_order', 'is', null).gt('order_count', 0).order('first_order', { ascending: false }).limit(15),
     sb.from('v_customers').select('full_name,mobile,lifetime_spend,last_order,days_since,tier,order_count').eq('store_id', store.id).eq('is_commercial', false).gte('lifetime_spend', 500).gte('days_since', 45).lte('days_since', 180).order('lifetime_spend', { ascending: false }).limit(15),
     sb.from('commentary').select('*').eq('store_id', store.id).eq('week_end', wk).maybeSingle()]);
   // services: this week vs prior 12-week average
