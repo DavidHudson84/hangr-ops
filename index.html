@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Hangr Ops</title>
+<style>
+:root{--navy:#1F3864;--blue:#2E75B6;--bg:#f4f6fa;--card:#fff;--ink:#1b2333;--mute:#667085;--line:#e3e7ef;--good:#127a3d;--bad:#b42318;--warn:#b54708;--chip:#eef3fb}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--navy);color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:5}
+header b{font-size:16px;letter-spacing:.3px}
+header nav{display:flex;gap:4px;flex-wrap:wrap}
+header nav a{color:#cfd8ea;text-decoration:none;padding:5px 10px;border-radius:6px}
+header nav a.on,header nav a:hover{background:rgba(255,255,255,.14);color:#fff}
+header .sp{flex:1}
+header select,header button{font:inherit}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.card h2{margin:0 0 10px;font-size:15px}
+.card h2 small{font-weight:400;color:var(--mute);margin-left:6px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.tile .l{color:var(--mute);font-size:12px}
+.tile .v{font-size:22px;font-weight:650;margin-top:2px}
+.tile .d{font-size:12px;margin-top:2px}
+.up{color:var(--good)}.dn{color:var(--bad)}.mu{color:var(--mute)}
+table{width:100%;border-collapse:collapse}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--mute);font-weight:600;background:#fafbfd;position:sticky;top:0}
+tr.click{cursor:pointer}tr.click:hover td{background:#f6f9ff}
+tr.tot td{font-weight:650;background:#fafbfd}
+.scroll{overflow-x:auto}
+.chip{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--chip);font-size:12px;color:var(--navy)}
+.btn{background:var(--blue);color:#fff;border:0;border-radius:7px;padding:8px 14px;font:inherit;cursor:pointer}
+.btn.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue)}
+.btn:disabled{opacity:.5;cursor:default}
+input,select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink)}
+textarea{width:100%;min-height:90px}
+label{display:block;font-size:12px;color:var(--mute);margin:8px 0 3px}
+.login{max-width:380px;margin:60px auto}
+.login input{width:100%}
+.drop{border:2px dashed #b8c4da;border-radius:10px;padding:30px;text-align:center;color:var(--mute);background:#fbfcfe}
+.drop.over{border-color:var(--blue);background:#eef4fd}
+.log div{padding:6px 0;border-bottom:1px solid var(--line)}
+.err{color:var(--bad)}
+.note{color:var(--mute);font-size:12px}
+svg text{font-size:11px;fill:var(--mute)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+@media (max-width:600px){main{padding:10px}.tile .v{font-size:18px}th,td{padding:5px 6px}}
+</style>
+</head>
+<body>
+<header id="hdr" hidden>
+  <b>Hangr Ops</b>
+  <select id="orgSel" hidden></select>
+  <nav id="nav"></nav>
+  <span class="sp"></span>
+  <span id="who" class="note" style="color:#cfd8ea"></span>
+  <button class="btn ghost" id="outBtn" style="padding:4px 10px">Sign out</button>
+</header>
+<main id="app"><p class="note">Loading…</p></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
