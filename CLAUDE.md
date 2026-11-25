@@ -18,3 +18,6 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   (`commercial_source='pos_account'`); `manual` overrides are never overwritten.
 - Scripted loads: AIOS `scripts/hangr_ops/` with `HANGR_OPS_LOADER_KEY` from AIOS `.env`.
 - Schema changes were applied through the Supabase MCP (migrations 0001-0006); dump the live schema before any rebuild.
+- Read policies on sales, customers, customer_orders and commentary use `store_id in (select visible_store_ids())`
+  (evaluated once per query). Per-row helper calls timed out on 132k orders; don't go back to them.
+  `orgs.orders_as_of` holds the latest order date (set by `refresh_customer_stats`) so `v_customers` needn't scan orders.
