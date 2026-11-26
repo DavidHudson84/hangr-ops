@@ -58,3 +58,10 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   the same 12 weeks a year earlier) and $ per ticket by customer tier.
 - Group and store screens: "Average retail order" card ($ per ticket vs last week, 12-week average, same week last year,
   weekly chart, size bands, tiers); group store table has $/ticket with vs 12-wk and vs LY.
+
+## Targeting by average ticket (26 Nov 2026)
+- `app.audience` filters `max_avg_ticket` / `min_avg_ticket` (spend_12m / orders_12m, else lifetime). Offer cycles have
+  `filters` (merged into the audience in `offer_preview` / `offer_approve`): Dec 2026 cycle has `{"min_avg_ticket": 30}`.
+- David's rule: low spenders (average ticket under $30) get "20% off 3 or more items" (campaign "Low spenders: 20% off 3+ items",
+  draft, valid to 31 Jan 2027); higher spenders keep the regular offers. Garment-specific offers are too hard at the counter.
+- `sms_results` also returns sent_orders, held_orders, held_sales so Results shows $/ticket sent vs held back.
