@@ -73,3 +73,6 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   customer moves through all six. Template key `offer_s{slot}_{variant}`. `offer_cycles.variants` is no longer used.
 - David's offer rules: % off and item counts only, no $ amounts; name items only for big-ticket work (doonas, blankets,
   curtains, trouser hems; wedding/evening gowns added as offer 6); doonas and blankets 40% off for every tier.
+- Low spenders (sms_settings.low_spender_cutoff, default $30) get sms_settings.low_spender_body in every period instead of
+  the rotation (template key offer_low). The Dec 2026 one-off low-spender campaign was cancelled (26 Nov 2026).
+- 26 Nov 2026: David is not yet sure about the marketing; every period stays draft until he says otherwise.

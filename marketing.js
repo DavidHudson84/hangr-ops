@@ -35,7 +35,7 @@ async function mkOffers(el) {
   // which offer each group gets in a period (same rule as app.offer_slot)
   const slotFor = (i, g) => ((i + g) % 6) + 1;
   el.innerHTML = `<div class="card"><h2>How it works</h2>
-    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in four waves by surname so the plant isn't hit at once. 10% are held back to measure what each offer won. Customers whose average ticket is under $30 are left out; they get "20% off 3 or more items" instead. Nothing is queued until you approve a period.</p></div>
+    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in four waves by surname so the plant isn't hit at once. 10% are held back to measure what each offer won. Customers whose average ticket is under the cut-off get the low-spender offer every period instead. Nothing is queued until you approve a period.</p></div>
   <div class="card"><h2>The six offers</h2>
     ${(lib || []).map(o => `<div class="card" style="margin:10px 0" id="ol-${o.slot}">
       <div class="row"><b>Offer ${o.slot}: </b><input data-name value="${esc(o.name)}" style="flex:1;max-width:420px"><span class="note">${esc(o.note || '')}</span></div>
@@ -44,6 +44,10 @@ async function mkOffers(el) {
       <div class="row"><button class="btn ghost" data-save="${o.slot}">Save offer ${o.slot}</button><span id="os-${o.slot}" class="note"></span></div>
     </div>`).join('')}
     <p class="note">Placeholders: {first_name}, {store}, {ends} (the end of the period). The opt-out line is added automatically. Changes apply to periods not yet approved.</p></div>
+  <div class="card" id="ol-low"><h2>Low spenders <small>average ticket under $${S.sms?.low_spender_cutoff ?? 30}; every period, instead of the rotation</small></h2>
+    <label>Message <span class="note" data-cnt="low-x">${(S.sms?.low_spender_body || '').length + FOOT.length} chars · ${segs((S.sms?.low_spender_body || '') + FOOT)} SMS</span></label>
+    <textarea data-var="x" id="lowBody" style="min-height:48px">${esc(S.sms?.low_spender_body || '')}</textarea>
+    <div class="row"><label style="margin:0">Cut-off $</label><input id="lowCut" type="number" value="${S.sms?.low_spender_cutoff ?? 30}" style="width:80px"><button class="btn ghost" id="lowSave">Save</button><span id="os-low" class="note"></span></div></div>
   <div class="card"><h2>Periods</h2><div class="scroll"><table>
     <tr><th>Period</th><th>Status</th>${[0, 1, 2, 3, 4, 5].map(g => `<th>Group ${g + 1}</th>`).join('')}<th></th></tr>
     ${per.map((c, i) => `<tr><td>${fmtD(c.starts_on)} – ${fmtD(c.ends_on)}</td><td>${statusChip(c.status)}</td>
@@ -59,10 +63,14 @@ async function mkOffers(el) {
     const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
     $('#os-' + b.dataset.save).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
   });
+  $('#lowSave').onclick = async () => {
+    const { error } = await sb.from('sms_settings').update({ low_spender_body: $('#lowBody').value.trim(), low_spender_cutoff: +$('#lowCut').value || 30 }).eq('org_id', S.org.id);
+    $('#os-low').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
+  };
   el.querySelectorAll('[data-prev]').forEach(b => b.onclick = async () => {
     const id = b.dataset.prev; $('#op-' + id).textContent = 'Working it out…';
     const { data, error } = await sb.rpc('offer_preview', { p_cycle: id });
-    $('#op-' + id).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `${num(data.total)} customers: ${Object.entries(data.by_offer || {}).map(([k, v]) => `${esc(k)} ${num(v)}`).join(' · ')}. Waves: ${Object.entries(data.by_wave || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ')}. About ${money(data.est_cost)} after the ${data.held_back_pct}% hold-back.`;
+    $('#op-' + id).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `${num(data.total)} customers: ${Object.entries(data.by_offer || {}).map(([k, v]) => `${esc(k)} ${num(v)}`).join(' · ')} · low spenders ${num(data.low_spenders)}. Waves: ${Object.entries(data.by_wave || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ')}. About ${money(data.est_cost)} after the ${data.held_back_pct}% hold-back.`;
   });
   el.querySelectorAll('[data-appr]').forEach(b => b.onclick = async () => {
     const id = b.dataset.appr;
