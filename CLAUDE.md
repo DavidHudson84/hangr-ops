@@ -67,6 +67,12 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 - `account_health(p_org, p_key)`: recent 4 weeks vs the prior 12 (8 vs 24 when billed in fewer than 10 of the last 26 weeks) and vs last year. Statuses: stopped, down (<75%), new (first invoice in 16 weeks), up (>125%), steady, dormant; down/up need a usual of $500+ per window.
 
 
+## Referrals and reviews (module A3, 26 Nov 2026; `growth.js`, Marketing tabs)
+- Referrals: code = `referral_code(customer id)` (indexed); `referral_lookup` (RLS-respecting) finds the referrer; staff log on the tab or the customer profile; `referral_report` matches the friend's later orders by mobile (`au_mobile`). Credit each way is `sms_settings.referral_credit` (75, matching the referral_invite template); credit is applied by hand in My Clean POS, then marked Credited. One-off campaigns now fill `{code}` and `{review_url}` per customer.
+- Reviews: `review_report` = review_request texts sent vs reviews logged per store (90 days); Google links editable per store (no link = no asks). Reviews are logged by hand.
+- Status `lost` added to account_health: $2,000+ in 52 weeks, nothing in the recent or prior window.
+- Laptop Hangr retirement: AIOS `scripts/hangr_ops/parity_check.py` (daily in labour_pull.cmd, `parity_weeks` RPC) writes `outputs/hangr-ops/parity.md`; steps in `outputs/hangr-ops/local-retirement.md`. At 26 Nov 2026 all 72 weeks match; blocked only on uploads resuming.
+
 ## $ per order (26 Nov 2026)
 - Sales Incoming "orders" are service lines (each service on a ticket counts once, ~1.45 per real ticket), so never quote
   sales / those orders as the average order. The average ticket comes from Customer Orders: `dash_ticket_weeks` (retail

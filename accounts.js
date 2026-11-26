@@ -6,12 +6,13 @@
 const ACC_STATUS = {
   stopped: ['Gone quiet', 'var(--bad)', 'no invoice for 5+ weeks (9+ for monthly billers) after regular work'],
   down: ['Down', 'var(--bad)', 'more than 25% below its own run-rate'],
+  lost: ['Lost', 'var(--bad)', 'billed $2,000+ in the last year, nothing in the last 16 weeks (32 for monthly billers)'],
   new: ['New', 'var(--blue)', 'first invoice in the last 16 weeks'],
   up: ['Up', 'var(--good)', 'more than 25% above its run-rate'],
   steady: ['Steady', 'var(--mute)', ''],
   dormant: ['Dormant', 'var(--mute)', 'nothing in either window'],
 };
-const ACC_ORDER = ['stopped', 'down', 'new', 'up', 'steady', 'dormant'];
+const ACC_ORDER = ['stopped', 'down', 'lost', 'new', 'up', 'steady', 'dormant'];
 const per4 = (v, win) => win ? v * 4 / win : v;
 
 function spark(points, lastw) {
@@ -43,6 +44,7 @@ async function accountsView(filter = 'commercial') {
       <div class="tile"><div class="l">Accounts billed in the last year</div><div class="v">${num(scope.filter(r => r.r52 > 0).length)}</div><div class="d mu">${money(scope.reduce((a, r) => a + r.r52, 0))} over 52 weeks</div></div>
       <div class="tile"><div class="l">12 weeks vs last year</div><div class="v">${pctTxt(ly12 ? r12 / ly12 - 1 : null)}</div><div class="d mu">${money(r12)} vs ${money(ly12)}</div></div>
       <div class="tile"><div class="l">Down or gone quiet</div><div class="v ${risk.length ? 'dn' : ''}">${risk.length}</div><div class="d mu">${money(lost4)} a month below their usual</div></div>
+      <div class="tile"><div class="l">Lost this year</div><div class="v">${scope.filter(r => r.watch && r.status === 'lost').length}</div><div class="d mu">${money(scope.filter(r => r.watch && r.status === 'lost').reduce((a, r) => a + r.r52, 0))} billed in the last 52 weeks</div></div>
       <div class="tile"><div class="l">New</div><div class="v">${scope.filter(r => r.status === 'new').length}</div><div class="d mu">${money(scope.filter(r => r.status === 'new').reduce((a, r) => a + per4(r.recent, r.win), 0))} a month</div></div>
     </div>
     <div class="card" style="margin-top:14px"><div class="scroll"><table>

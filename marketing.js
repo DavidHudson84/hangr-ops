@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -19,7 +19,7 @@ async function marketingView(tab = 'offers') {
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
   <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
-  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, campaigns: mkCampaigns, results: mkResults, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
+  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));
 }
 
@@ -224,20 +224,23 @@ async function mkSettings(el) {
     <label>Test number</label><input id="sTest" value="${esc(s.test_mobile || '')}">
     <label>Sender shown on the phone</label><input id="sSender" value="${esc(s.sender_id || '')}"> <span class="note">A name like MasterDC can't receive replies, so STOP replies can't come back. Leave blank to send from ${esc(s.from_number || 'the number')} instead, which can.</span>
     <div class="row"><div><label>Send from</label><input id="sStart" value="${esc((s.quiet_start || '09:00').slice(0, 5))}" style="width:80px"></div><div><label>until</label><input id="sEnd" value="${esc((s.quiet_end || '19:00').slice(0, 5))}" style="width:80px"></div>
-      <div><label>Marketing texts per customer per month</label><input id="sCap" type="number" value="${s.marketing_cap_per_month ?? 2}" style="width:80px"></div><div><label>Held back to measure (%)</label><input id="sCtl" type="number" value="${s.control_pct ?? 10}" style="width:80px"></div></div>
+      <div><label>Marketing texts per customer per month</label><input id="sCap" type="number" value="${s.marketing_cap_per_month ?? 2}" style="width:80px"></div><div><label>Held back to measure (%)</label><input id="sCtl" type="number" value="${s.control_pct ?? 10}" style="width:80px"></div>
+      <div><label>Referral credit each way ($)</label><input id="sRef" type="number" value="${s.referral_credit ?? 75}" style="width:80px"></div></div>
     <p class="note">Never on Sundays. ${money(s.cost_per_sms, 3)} per SMS part.</p>
     <div class="row"><button class="btn" id="sSave">Save</button><span id="sMsg" class="note"></span></div></div>`;
   $('#sMode').value = s.mode || 'off';
   $('#sSave').onclick = async () => {
     const mode = $('#sMode').value;
     if (mode === 'live' && s.mode !== 'live' && !confirm('Turn on live sending? Everything queued and due will start going to customers within 5 minutes (sending hours only).')) return;
-    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
+    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
     $('#sMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.'; if (!error) marketingView('settings');
   };
 }
 
 /* ---------- customer page extras: texts, referral code, do-not-contact ---------- */
 async function customerMarketingCard(c) {
+  if (!S.sms) S.sms = (await sb.from('sms_settings').select('*').eq('org_id', S.org.id).maybeSingle()).data;
+  const credit = +(S.sms?.referral_credit ?? 75);
   const [{ data: texts }, { data: dnc }, { data: code }] = await Promise.all([
     sb.from('sms_sends').select('created_at,sent_at,template_key,category,status,body').eq('customer_id', c.id).order('created_at', { ascending: false }).limit(20),
     sb.from('do_not_contact').select('reason').eq('customer_id', c.id).maybeSingle(),
@@ -247,7 +250,7 @@ async function customerMarketingCard(c) {
     <div class="scroll"><table><tr><th>When</th><th>Message</th><th>Status</th></tr>
     ${(texts || []).map(t => `<tr><td>${new Date(t.sent_at || t.created_at).toLocaleDateString('en-AU')}</td><td style="white-space:normal;text-align:left">${esc(t.body)}</td><td>${statusChip(t.status)}</td></tr>`).join('') || '<tr><td colspan="3" class="mu">No texts yet</td></tr>'}</table></div>
     <h2 style="margin-top:12px">Log a referral they made</h2>
-    <div class="row"><input id="rName" placeholder="Friend's name"><input id="rMob" placeholder="Friend's mobile"><input id="rVal" type="number" placeholder="First order $" style="width:120px"><button class="btn ghost" id="rLog">Log ($75 each)</button><span id="rMsg" class="note"></span></div></div>`;
+    <div class="row"><input id="rName" placeholder="Friend's name"><input id="rMob" placeholder="Friend's mobile"><input id="rVal" type="number" placeholder="First order $" style="width:120px"><button class="btn ghost" id="rLog">Log (${money(credit)} each)</button><span id="rMsg" class="note"></span></div></div>`;
 }
 function wireCustomerMarketing(c) {
   const on = $('#dncOn'), off = $('#dncOff');
@@ -255,7 +258,8 @@ function wireCustomerMarketing(c) {
   if (off) off.onclick = async () => { await sb.from('do_not_contact').delete().eq('org_id', S.org.id).eq('customer_id', c.id); customerView(c.id); };
   const r = $('#rLog'); if (r) r.onclick = async () => {
     const { data: code } = await sb.rpc('referral_code', { p_customer: c.id });
-    const { error } = await sb.from('referrals').insert({ org_id: S.org.id, referrer_customer_id: c.id, code, referee_name: $('#rName').value.trim() || null, referee_mobile: $('#rMob').value.trim() || null, first_order_value: +$('#rVal').value || null, first_order_date: iso(new Date()), logged_by: S.user.id });
-    $('#rMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Logged. Apply $75 credit to both in the POS.';
+    const { error } = await sb.from('referrals').insert({ org_id: S.org.id, referrer_customer_id: c.id, code, referee_name: $('#rName').value.trim() || null, referee_mobile: $('#rMob').value.trim() || null, first_order_value: +$('#rVal').value || null, first_order_date: iso(new Date()), first_order_store: S.stores.find(s => s.id === c.store_id)?.name || null,
+      referrer_credit: +(S.sms?.referral_credit ?? 75), referee_credit: +(S.sms?.referral_credit ?? 75), logged_by: S.user.id });
+    $('#rMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `Logged. Apply ${money(S.sms?.referral_credit ?? 75)} credit to both in the POS.`;
   };
 }
