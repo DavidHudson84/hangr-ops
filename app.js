@@ -142,22 +142,80 @@ function stats(series, weekEnd, key = 'retail') {
 }
 
 /* ---------- charts ---------- */
-function barChart(series, key, avgKey, h = 160) {
+function barChart(series, key, avgKey, h = 160, note) {
   if (!series.length) return '<p class="note">No data yet.</p>';
   const W = 900, pad = 34, max = Math.max(...series.map(s => s[key])) * 1.1 || 1, bw = (W - pad) / series.length;
   let bars = '', line = '';
   series.forEach((s, i) => {
     const bh = (s[key] / max) * (h - 24);
-    bars += `<rect x="${pad + i * bw + 1}" y="${h - 18 - bh}" width="${Math.max(1, bw - 2)}" height="${bh}" fill="#2E75B6" opacity=".85"><title>${fmtD(s.week_end)}: ${money(s[key])}</title></rect>`;
+    bars += `<rect x="${pad + i * bw + 1}" y="${h - 18 - bh}" width="${Math.max(1, bw - 2)}" height="${bh}" fill="#2E75B6" opacity=".85"><title>${fmtD(s.week_end)}: ${money(s[key], max < 1000 ? 2 : 0)}</title></rect>`;
     if (avgKey && s[avgKey] != null) line += `${line ? 'L' : 'M'}${pad + i * bw + bw / 2},${h - 18 - (s[avgKey] / max) * (h - 24)}`;
     if (i % Math.ceil(series.length / 8) === 0) bars += `<text x="${pad + i * bw}" y="${h - 4}">${fmtD(s.week_end)}</text>`;
   });
-  const ticks = [0, .5, 1].map(f => `<text x="0" y="${h - 18 - f * (h - 24) + 4}">${money(max * f / 1000)}k</text>`).join('');
+  const ticks = [0, .5, 1].map(f => `<text x="0" y="${h - 18 - f * (h - 24) + 4}">${max < 1000 ? money(max * f) : money(max * f / 1000) + 'k'}</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${h}" width="100%" role="img">${ticks}${bars}${line ? `<path d="${line}" fill="none" stroke="#1F3864" stroke-width="2"/>` : ''}</svg>
-    ${avgKey ? '<p class="note">Bars are weekly sales; the dark line is the 12-week rolling average.</p>' : ''}`;
+    ${avgKey ? `<p class="note">${note || 'Bars are weekly sales; the dark line is the 12-week rolling average.'}</p>` : ''}`;
 }
 function withRolling(series, key) {
   return series.map((s, i) => { const p = series.slice(Math.max(0, i - 11), i + 1); return { ...s, avg: p.length >= 4 ? p.reduce((a, x) => a + x[key], 0) / p.length : null }; });
+}
+
+/* ---------- $ per order ---------- */
+// retail $/order this week vs last week, prior 12-week average (sum/sum) and the same week last year
+function aovStats(series, wk) {
+  const i = series.findIndex(w => w.week_end === wk), cur = series[i];
+  const a = w => w && w.r_orders ? w.retail / w.r_orders : null;
+  const p = series.slice(Math.max(0, i - 12), i).filter(w => w.r_orders);
+  const ly = series.find(w => Math.abs((new Date(w.week_end) - new Date(addDays(wk, -364))) / 864e5) <= 3);
+  return { cur: a(cur), last: i > 0 ? a(series[i - 1]) : null, avg12: p.length ? p.reduce((s, w) => s + w.retail, 0) / p.reduce((s, w) => s + w.r_orders, 0) : null,
+    ly: a(ly), ppo: cur && cur.r_orders ? cur.r_pieces / cur.r_orders : null };
+}
+async function tickets() { return S.cache.tickets ||= await all(() => sb.rpc('dash_ticket_weeks', { p_org: S.org.id, p_from: '2023-01-01' })); }
+// real tickets per week for these stores, shaped like weekMap rows so aovStats works on it
+async function ticketSeries(storeIds) {
+  const m = new Map();
+  for (const r of await tickets()) {
+    if (!storeIds.includes(r.store_id)) continue;
+    const o = m.get(r.week_end) || { week_end: r.week_end, retail: 0, r_orders: 0, r_pieces: 0 };
+    o.retail += +r.sales; o.r_orders += +r.orders; m.set(r.week_end, o);
+  }
+  return [...m.values()].sort((a, b) => a.week_end < b.week_end ? -1 : 1);
+}
+async function orderMix() { return S.cache.mix ||= (await sb.rpc('dash_order_mix', { p_org: S.org.id })).data || []; }
+async function aovCard(siSeries, wk, storeIds) {
+  const series = await ticketSeries(storeIds);
+  const lastT = series.length ? series[series.length - 1].week_end : null;
+  if (!series.length) return '';
+  const wkT = series.some(w => w.week_end === wk) ? wk : lastT;
+  const A = aovStats(series, wkT);
+  const si = siSeries.find(w => w.week_end === wkT);
+  A.ppo = si && A.cur ? si.r_pieces / series.find(w => w.week_end === wkT).r_orders : null;
+  const aovSer = series.filter(w => w.r_orders && w.week_end <= wkT).slice(-52).map(w => ({ week_end: w.week_end, aov: w.retail / w.r_orders }));
+  const mix = (await orderMix()).filter(r => storeIds.includes(r.store_id));
+  const agg = (kind, period) => { const m = new Map(); for (const r of mix.filter(r => r.kind === kind && r.period === period)) { const o = m.get(r.label) || { label: r.label, sort: r.sort, orders: 0, sales: 0 }; o.orders += +r.orders; o.sales += +r.sales; m.set(r.label, o); } return [...m.values()].sort((a, b) => a.sort - b.sort); };
+  const cur = agg('band', 'cur'), ly = agg('band', 'ly'), tiers = agg('tier', 'cur');
+  const tot = a => a.reduce((s, r) => ({ o: s.o + r.orders, s: s.s + r.sales }), { o: 0, s: 0 });
+  const tc = tot(cur), tl = tot(ly);
+  const under30 = cur.filter(r => r.sort <= 2).reduce((s, r) => s + r.orders, 0);
+  const tile = (l, v, d) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  return `<div class="card"><h2>Average retail order <small>real tickets from Customer Orders, week ending ${fmtD(wkT)}${wkT !== wk ? ` (Customer Orders are loaded to ${fmtD(lastT)})` : ''}</small></h2>
+    <div class="tiles">
+      ${tile('$ per ticket', money(A.cur, 2), `<span class="mu">${A.ppo ? A.ppo.toFixed(2) + ' pieces per ticket' : ''}</span>`)}
+      ${tile('vs last week', money(A.last, 2), pctTxt(pct(A.cur, A.last)))}
+      ${tile('vs 12-week average', money(A.avg12, 2), pctTxt(pct(A.cur, A.avg12)))}
+      ${tile('vs same week last year', money(A.ly, 2), pctTxt(pct(A.cur, A.ly)))}
+    </div>
+    <div style="margin-top:10px">${barChart(withRolling(aovSer, 'aov'), 'aov', 'avg', 130, 'Bars are $ per retail ticket each week; the dark line is the 12-week rolling average. Account customers are left out.')}</div>
+    ${cur.length ? `<h2 style="margin-top:14px">Order sizes <small>retail orders, last 12 weeks of Customer Orders loaded vs the same 12 weeks a year earlier</small></h2>
+    <div class="grid g2"><div class="scroll"><table>
+      <tr><th>Order value</th><th>Orders</th><th>% of orders</th><th>Last year</th><th>% of sales</th></tr>
+      ${cur.map(r => { const l = ly.find(x => x.label === r.label); return `<tr><td>${esc(r.label)}</td><td>${num(r.orders)}</td><td>${(r.orders / tc.o * 100).toFixed(1)}%</td><td class="mu">${l && tl.o ? (l.orders / tl.o * 100).toFixed(1) + '%' : '–'}</td><td>${(r.sales / tc.s * 100).toFixed(1)}%</td></tr>`; }).join('')}
+      <tr class="tot"><td>Average order</td><td>${num(tc.o)}</td><td>${money(tc.s / tc.o, 2)}</td><td class="mu">${tl.o ? money(tl.s / tl.o, 2) : '–'}</td><td></td></tr>
+    </table></div>
+    <div><table><tr><th>Customer tier</th><th>Orders</th><th>$ per order</th></tr>
+      ${tiers.map(r => `<tr><td>${esc(r.label)}</td><td>${num(r.orders)}</td><td>${money(r.sales / r.orders, 2)}</td></tr>`).join('')}</table>
+      <p class="note">${(under30 / tc.o * 100).toFixed(0)}% of retail orders are under $30. Adding one more garment to those orders is the quickest way to lift the average. The ideas to test are in the plan.</p></div></div>` : ''}
+  </div>`;
 }
 
 /* ---------- routing ---------- */
@@ -200,26 +258,29 @@ async function groupView(weekSel) {
     return { s, st, sc };
   }).filter(x => x.st.cur || x.s.active);
   const tot = g.cur;
+  const gT = aovStats(await ticketSeries(stores.map(s => s.id)), wk);
+  for (const x of per) x.av = aovStats(await ticketSeries([x.s.id]), wk);
   app.innerHTML = `
   <div class="row" style="margin-bottom:12px"><h2 style="margin:0;font-size:18px">${esc(S.org.name)}: group</h2><span class="sp"></span>${weekPicker(group, wk, v => groupView(v))}</div>
   <div class="tiles">
     <div class="tile"><div class="l">Retail sales</div><div class="v">${money(tot.retail)}</div><div class="d">${pctTxt(pct(tot.retail, g.avg12))} vs 12-wk avg · ${pctTxt(g.ly ? pct(tot.retail, g.ly.retail) : null)} vs LY</div></div>
     <div class="tile"><div class="l">Commercial (on account)</div><div class="v">${money(tot.commercial)}</div><div class="d">${pctTxt(pct(tot.commercial, gc.avg12))} vs 12-wk avg</div></div>
     <div class="tile"><div class="l">Restoration</div><div class="v">${money(tot.restoration)}</div><div class="d mu">through the stores' POS</div></div>
-    <div class="tile"><div class="l">Retail orders</div><div class="v">${num(tot.r_orders)}</div><div class="d mu">${money(tot.retail / tot.r_orders, 2)} per order</div></div>
+    <div class="tile"><div class="l">Retail service lines</div><div class="v">${num(tot.r_orders)}</div><div class="d">${gT.cur ? `${money(gT.cur, 2)} per ticket · ${pctTxt(pct(gT.cur, gT.avg12))} vs 12-wk` : '<span class="mu">ticket data not loaded for this week</span>'}</div></div>
     <div class="tile"><div class="l">Retail pieces</div><div class="v">${num(tot.r_pieces)}</div><div class="d mu">${money(tot.retail / tot.r_pieces, 2)} per piece</div></div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Stores <small>retail sales, week ending ${fmtD(wk)}</small></h2><div class="scroll"><table>
-    <tr><th>Store</th><th>Retail</th><th>12-wk avg</th><th>vs avg</th><th>vs LY</th><th>Orders</th><th>$/order</th><th>Pcs/order</th><th>$/piece</th><th>Commercial</th></tr>
-    ${per.map(({ s, st, sc }) => {
+    <tr><th>Store</th><th>Retail</th><th>12-wk avg</th><th>vs avg</th><th>vs LY</th><th>Lines</th><th>$/ticket</th><th>vs 12-wk</th><th>vs LY</th><th>Pcs/line</th><th>$/piece</th><th>Commercial</th></tr>
+    ${per.map(({ s, st, sc, av }) => {
     const c = st.cur || { retail: 0, r_orders: 0, r_pieces: 0, commercial: 0 };
     return `<tr class="click" onclick="location.hash='#/store/${s.code}/${wk}'"><td>${esc(s.name)} ${s.channel !== 'retail' ? `<span class="chip">${s.channel}</span>` : ''}</td>
       <td>${money(c.retail)}</td><td>${money(st.avg12)}</td><td>${pctTxt(pct(c.retail, st.avg12))}</td><td>${pctTxt(st.ly ? pct(c.retail, st.ly.retail) : null)}</td>
-      <td>${num(c.r_orders)}</td><td>${c.r_orders ? money(c.retail / c.r_orders, 2) : '–'}</td><td>${c.r_orders ? (c.r_pieces / c.r_orders).toFixed(2) : '–'}</td><td>${c.r_pieces ? money(c.retail / c.r_pieces, 2) : '–'}</td>
+      <td>${num(c.r_orders)}</td><td>${av.cur ? money(av.cur, 2) : '–'}</td><td>${pctTxt(pct(av.cur, av.avg12))}</td><td>${pctTxt(pct(av.cur, av.ly))}</td><td>${c.r_orders ? (c.r_pieces / c.r_orders).toFixed(2) : '–'}</td><td>${c.r_pieces ? money(c.retail / c.r_pieces, 2) : '–'}</td>
       <td>${money(c.commercial)}</td></tr>`;
   }).join('')}
-    <tr class="tot"><td>Group</td><td>${money(tot.retail)}</td><td>${money(g.avg12)}</td><td>${pctTxt(pct(tot.retail, g.avg12))}</td><td>${pctTxt(g.ly ? pct(tot.retail, g.ly.retail) : null)}</td><td>${num(tot.r_orders)}</td><td>${money(tot.retail / tot.r_orders, 2)}</td><td>${(tot.r_pieces / tot.r_orders).toFixed(2)}</td><td>${money(tot.retail / tot.r_pieces, 2)}</td><td>${money(tot.commercial)}</td></tr>
-  </table></div><p class="note">Retail and commercial are split by POS service (Admin › Services). "vs LY" fills in once last year's weeks are loaded.</p></div>
+    <tr class="tot"><td>Group</td><td>${money(tot.retail)}</td><td>${money(g.avg12)}</td><td>${pctTxt(pct(tot.retail, g.avg12))}</td><td>${pctTxt(g.ly ? pct(tot.retail, g.ly.retail) : null)}</td><td>${num(tot.r_orders)}</td><td>${gT.cur ? money(gT.cur, 2) : '–'}</td><td>${pctTxt(pct(gT.cur, gT.avg12))}</td><td>${pctTxt(pct(gT.cur, gT.ly))}</td><td>${(tot.r_pieces / tot.r_orders).toFixed(2)}</td><td>${money(tot.retail / tot.r_pieces, 2)}</td><td>${money(tot.commercial)}</td></tr>
+  </table></div><p class="note">Retail and commercial are split by POS service (Admin › Services). Orders are as Sales Incoming counts them (each service on a ticket counts once); $/ticket is the real average ticket from Customer Orders. "vs LY" fills in once last year's weeks are loaded.</p></div>
+  ${await aovCard(group, wk, stores.map(s => s.id))}
   <div class="card"><h2>Group retail sales by week</h2>${barChart(withRolling(group.slice(-52), 'retail'), 'retail', 'avg')}</div>
   <div class="card"><h2>Commercial by week <small>on-account work booked through the stores</small></h2>${barChart(withRolling(group.slice(-52), 'commercial'), 'commercial', 'avg', 120)}</div>
   ${await customersSummaryCard(stores.map(s => s.id), true)}`;
@@ -265,7 +326,7 @@ async function storeView(code, weekSel) {
   const sv = new Map();
   for (const r of svc.data || []) {
     const o = sv.get(r.service) || { service: r.service, channel: r.channel, cur: 0, orders: 0, pieces: 0, prior: 0, n: new Set() };
-    if (r.week_end === wk) { o.cur += +r.sales_gross; o.orders += +r.orders; o.pieces += +r.pieces; } else { o.prior += +r.sales_gross; o.n.add(r.week_end); }
+    if (r.week_end === wk) { o.cur += +r.sales_gross; o.orders += +r.orders; o.pieces += +r.pieces; } else { o.prior += +r.sales_gross; o.pOrders = (o.pOrders || 0) + +r.orders; o.n.add(r.week_end); }
     sv.set(r.service, o);
   }
   const priorWeeks = new Set((svc.data || []).filter(r => r.week_end !== wk).map(r => r.week_end)).size || 1;
@@ -279,16 +340,17 @@ async function storeView(code, weekSel) {
   <div class="tiles">
     <div class="tile"><div class="l">Retail sales</div><div class="v">${money(c.retail)}</div><div class="d">${pctTxt(pct(c.retail, st.avg12))} vs 12-wk avg (${money(st.avg12)})</div></div>
     <div class="tile"><div class="l">vs same week last year</div><div class="v">${st.ly ? money(st.ly.retail) : '–'}</div><div class="d">${pctTxt(st.ly ? pct(c.retail, st.ly.retail) : null)}</div></div>
-    <div class="tile"><div class="l">Orders</div><div class="v">${num(c.r_orders)}</div><div class="d mu">${c.r_orders ? money(c.retail / c.r_orders, 2) : '–'} per order</div></div>
-    <div class="tile"><div class="l">Pieces</div><div class="v">${num(c.r_pieces)}</div><div class="d mu">${c.r_pieces ? money(c.retail / c.r_pieces, 2) : '–'} per piece · ${c.r_orders ? (c.r_pieces / c.r_orders).toFixed(2) : '–'} per order</div></div>
+    <div class="tile"><div class="l">Service lines</div><div class="v">${num(c.r_orders)}</div><div class="d mu">service lines; see Average retail order below</div></div>
+    <div class="tile"><div class="l">Pieces</div><div class="v">${num(c.r_pieces)}</div><div class="d mu">${c.r_pieces ? money(c.retail / c.r_pieces, 2) : '–'} per piece · ${c.r_orders ? (c.r_pieces / c.r_orders).toFixed(2) : '–'} per line</div></div>
     <div class="tile"><div class="l">Commercial booked here</div><div class="v">${money(c.commercial)}</div><div class="d mu">on-account work, not in retail</div></div>
     <div class="tile"><div class="l">Counter wage %</div><div class="v">${wageCur != null ? (wageCur * 100).toFixed(1) + '%' : '<span class="mu">–</span>'}</div><div class="d mu">${wage12 != null ? `12-wk ${(wage12 * 100).toFixed(1)}% · ` : ''}${labW.has(wk) ? money(labW.get(wk)) + ' labour' : 'no labour data this week'}</div></div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Retail sales by week</h2>${barChart(withRolling(ser.slice(-52), 'retail'), 'retail', 'avg')}</div>
+  ${await aovCard(ser, wk, [store.id])}
   <div class="grid g2">
     <div class="card"><h2>Services <small>week ending ${fmtD(wk)} vs its prior 12-week average</small></h2><div class="scroll"><table>
-      <tr><th>Service</th><th>Sales</th><th>12-wk avg</th><th>vs avg</th><th>Orders</th><th>Pieces</th><th>$/piece</th></tr>
-      ${svList.map(x => { const avg = x.prior / priorWeeks; return `<tr><td>${esc(x.service)} ${x.channel !== 'retail' ? `<span class="chip">${x.channel}</span>` : ''}</td><td>${money(x.cur)}</td><td>${money(avg)}</td><td>${pctTxt(pct(x.cur, avg))}</td><td>${num(x.orders)}</td><td>${num(x.pieces)}</td><td>${x.pieces ? money(x.cur / x.pieces, 2) : '–'}</td></tr>`; }).join('')}
+      <tr><th>Service</th><th>Sales</th><th>12-wk avg</th><th>vs avg</th><th>Orders</th><th>$/order (this service)</th><th>12-wk</th><th>Pieces</th><th>$/piece</th></tr>
+      ${svList.map(x => { const avg = x.prior / priorWeeks; return `<tr><td>${esc(x.service)} ${x.channel !== 'retail' ? `<span class="chip">${x.channel}</span>` : ''}</td><td>${money(x.cur)}</td><td>${money(avg)}</td><td>${pctTxt(pct(x.cur, avg))}</td><td>${num(x.orders)}</td><td>${x.orders ? money(x.cur / x.orders, 2) : '–'}</td><td class="mu">${x.pOrders ? money(x.prior / x.pOrders, 2) : '–'}</td><td>${num(x.pieces)}</td><td>${x.pieces ? money(x.cur / x.pieces, 2) : '–'}</td></tr>`; }).join('')}
     </table></div></div>
     <div class="card"><h2>Monthly</h2><div class="scroll"><table>
       <tr><th>Month</th><th>Retail</th><th>vs LY</th><th>Commercial</th></tr>

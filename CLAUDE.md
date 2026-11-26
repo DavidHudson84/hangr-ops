@@ -50,3 +50,11 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   (kept across the daily window replace because they key on the EH timesheet id), location mapping + `signed_off`.
   Nothing writes back to Employment Hero.
 - Store screen's Counter wage % tile reads `v_labour_week` (admins only; RLS hides labour from store managers).
+
+## $ per order (26 Nov 2026)
+- Sales Incoming "orders" are service lines (each service on a ticket counts once, ~1.45 per real ticket), so never quote
+  sales / those orders as the average order. The average ticket comes from Customer Orders: `dash_ticket_weeks` (retail
+  customers, not Void, sales > 0, weeks labelled by the Sunday). `dash_order_mix` gives size bands (last 12 weeks loaded vs
+  the same 12 weeks a year earlier) and $ per ticket by customer tier.
+- Group and store screens: "Average retail order" card ($ per ticket vs last week, 12-week average, same week last year,
+  weekly chart, size bands, tiers); group store table has $/ticket with vs 12-wk and vs LY.
