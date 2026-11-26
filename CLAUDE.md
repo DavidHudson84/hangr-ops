@@ -65,3 +65,11 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 - David's rule: low spenders (average ticket under $30) get "20% off 3 or more items" (campaign "Low spenders: 20% off 3+ items",
   draft, valid to 31 Jan 2027); higher spenders keep the regular offers. Garment-specific offers are too hard at the counter.
 - `sms_results` also returns sent_orders, held_orders, held_sales so Results shows $/ticket sent vs held back.
+
+## Offer rotation (26 Nov 2026)
+- `offer_library` holds six offers (slot 1-6, variants vip/casual/lapsed). `offer_cycles` rows are now just periods.
+- Customers sit in six fixed groups (`app.offer_group` = hash of customer id mod 6). In period i (order by starts_on,
+  `app.cycle_no_in_seq`) group g gets offer ((i + g) mod 6) + 1 (`app.offer_slot`), so six offers run at once and each
+  customer moves through all six. Template key `offer_s{slot}_{variant}`. `offer_cycles.variants` is no longer used.
+- David's offer rules: % off and item counts only, no $ amounts; name items only for big-ticket work (doonas, blankets,
+  curtains, trouser hems; wedding/evening gowns added as offer 6); doonas and blankets 40% off for every tier.

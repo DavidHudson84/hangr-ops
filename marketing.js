@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['offers', 'Offer calendar'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -24,36 +24,55 @@ async function marketingView(tab = 'offers') {
 }
 
 /* ---------- offer calendar ---------- */
+// Six-offer library, rotated: customers sit in six fixed groups and each group gets a different library offer
+// each period, moving one along every period (offer_slot in the database). Periods are offer_cycles rows.
+const VAR_NAMES = { vip: 'VIP and Regular', casual: 'Casual', lapsed: 'Lapsed (180-365 days)' };
 async function mkOffers(el) {
-  const { data: cycles } = await sb.from('offer_cycles').select('*').eq('org_id', S.org.id).order('starts_on');
-  el.innerHTML = `<div class="card"><h2>Six offers a year <small>one every two months; every customer gets the variant for their tier</small></h2>
-    <p class="note">VIP and Regular get added value (no discount), Casual a standard offer, Lapsed the strongest. Each cycle goes out in four waves by surname (A–F, G–L, M–R, S–Z) so the plant isn't hit at once. 10% are held back to measure what the offer actually won. Nothing is queued until you approve it here.</p>
-    ${(cycles || []).map(c => `<div class="card" style="margin:10px 0" id="oc-${c.id}">
-      <div class="row"><b>${c.year} · cycle ${c.cycle_no}: ${esc(c.theme)}</b> ${statusChip(c.status)}<span class="sp"></span><span class="note">${fmtD(c.starts_on)} – ${fmtD(c.ends_on)}</span></div>
-      ${['vip', 'casual', 'lapsed'].map(v => { const b = c.variants?.[v]?.body || ''; return `<label>${{ vip: 'VIP and Regular', casual: 'Casual', lapsed: 'Lapsed (180-365 days)' }[v]} <span class="note" data-cnt="${c.id}-${v}">${b.length + FOOT.length} chars · ${segs(b + FOOT)} SMS</span></label>
-        <textarea data-var="${v}" style="min-height:52px" ${c.status !== 'draft' ? 'disabled' : ''}>${esc(b)}</textarea>`; }).join('')}
-      <p class="note">${esc(c.margin_floor_note || '')} Placeholders: {first_name}, {store}, {ends}. The opt-out line is added automatically.</p>
-      <div class="row">${c.status === 'draft' ? `<button class="btn ghost" data-save="${c.id}">Save wording</button><button class="btn ghost" data-prev="${c.id}">Preview reach and cost</button><button class="btn" data-appr="${c.id}">Approve and queue</button>` : ''}
-        ${c.status === 'queued' ? `<button class="btn ghost" data-cancel="${c.campaign_id}">Cancel unsent messages</button>` : ''}<span id="op-${c.id}" class="note"></span></div>
-    </div>`).join('')}</div>`;
+  const [{ data: lib }, { data: cycles }] = await Promise.all([
+    sb.from('offer_library').select('*').eq('org_id', S.org.id).order('slot'),
+    sb.from('offer_cycles').select('*').eq('org_id', S.org.id).order('starts_on')]);
+  const per = cycles || [];
+  // which offer each group gets in a period (same rule as app.offer_slot)
+  const slotFor = (i, g) => ((i + g) % 6) + 1;
+  el.innerHTML = `<div class="card"><h2>How it works</h2>
+    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in four waves by surname so the plant isn't hit at once. 10% are held back to measure what each offer won. Customers whose average ticket is under $30 are left out; they get "20% off 3 or more items" instead. Nothing is queued until you approve a period.</p></div>
+  <div class="card"><h2>The six offers</h2>
+    ${(lib || []).map(o => `<div class="card" style="margin:10px 0" id="ol-${o.slot}">
+      <div class="row"><b>Offer ${o.slot}: </b><input data-name value="${esc(o.name)}" style="flex:1;max-width:420px"><span class="note">${esc(o.note || '')}</span></div>
+      ${['vip', 'casual', 'lapsed'].map(v => { const b = o.variants?.[v]?.body || ''; return `<label>${VAR_NAMES[v]} <span class="note" data-cnt="${o.slot}-${v}">${b.length + FOOT.length} chars · ${segs(b + FOOT)} SMS</span></label>
+        <textarea data-var="${v}" style="min-height:48px">${esc(b)}</textarea>`; }).join('')}
+      <div class="row"><button class="btn ghost" data-save="${o.slot}">Save offer ${o.slot}</button><span id="os-${o.slot}" class="note"></span></div>
+    </div>`).join('')}
+    <p class="note">Placeholders: {first_name}, {store}, {ends} (the end of the period). The opt-out line is added automatically. Changes apply to periods not yet approved.</p></div>
+  <div class="card"><h2>Periods</h2><div class="scroll"><table>
+    <tr><th>Period</th><th>Status</th>${[0, 1, 2, 3, 4, 5].map(g => `<th>Group ${g + 1}</th>`).join('')}<th></th></tr>
+    ${per.map((c, i) => `<tr><td>${fmtD(c.starts_on)} – ${fmtD(c.ends_on)}</td><td>${statusChip(c.status)}</td>
+      ${[0, 1, 2, 3, 4, 5].map(g => `<td class="mu">${g === 0 ? '' : ''}${slotFor(i, g)}</td>`).join('')}
+      <td style="text-align:left">${c.status === 'draft' ? `<button class="btn ghost" style="padding:2px 8px" data-prev="${c.id}">Preview</button> <button class="btn" style="padding:2px 8px" data-appr="${c.id}">Approve and queue</button>` : ''}
+        ${c.status === 'queued' ? `<button class="btn ghost" style="padding:2px 8px" data-cancel="${c.campaign_id}">Cancel unsent</button>` : ''}</td></tr>
+      <tr><td colspan="9" id="op-${c.id}" class="note" style="text-align:left;white-space:normal"></td></tr>`).join('')}
+  </table></div><p class="note">The group columns show which offer number each group gets that period.</p></div>`;
   el.querySelectorAll('textarea[data-var]').forEach(t => t.oninput = () => { const id = t.closest('.card').id.slice(3); const n = el.querySelector(`[data-cnt="${id}-${t.dataset.var}"]`); n.textContent = `${t.value.length + FOOT.length} chars · ${segs(t.value + FOOT)} SMS`; });
-  const vars = id => { const card = $('#oc-' + id); const o = {}; card.querySelectorAll('textarea[data-var]').forEach(t => o[t.dataset.var] = { body: t.value.trim() }); return o; };
-  el.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => { const { error } = await sb.from('offer_cycles').update({ variants: vars(b.dataset.save) }).eq('id', b.dataset.save); $('#op-' + b.dataset.save).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.'; });
+  el.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+    const card = $('#ol-' + b.dataset.save), v = {};
+    card.querySelectorAll('textarea[data-var]').forEach(t => v[t.dataset.var] = { body: t.value.trim() });
+    const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
+    $('#os-' + b.dataset.save).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
+  });
   el.querySelectorAll('[data-prev]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.prev; await sb.from('offer_cycles').update({ variants: vars(id) }).eq('id', id);
-    $('#op-' + id).textContent = 'Working it out…';
+    const id = b.dataset.prev; $('#op-' + id).textContent = 'Working it out…';
     const { data, error } = await sb.rpc('offer_preview', { p_cycle: id });
-    $('#op-' + id).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `${num(data.total)} customers (VIP/Regular ${num(data.by_variant?.vip)}, Casual ${num(data.by_variant?.casual)}, Lapsed ${num(data.by_variant?.lapsed)}). Waves: ${Object.entries(data.by_wave || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ')}. About ${money(data.est_cost)} after the ${data.held_back_pct}% hold-back.`;
+    $('#op-' + id).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `${num(data.total)} customers: ${Object.entries(data.by_offer || {}).map(([k, v]) => `${esc(k)} ${num(v)}`).join(' · ')}. Waves: ${Object.entries(data.by_wave || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ')}. About ${money(data.est_cost)} after the ${data.held_back_pct}% hold-back.`;
   });
   el.querySelectorAll('[data-appr]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.appr; await sb.from('offer_cycles').update({ variants: vars(id) }).eq('id', id);
-    if (!confirm('Approve this offer and queue every wave? Messages only leave while Sending is on.')) return;
+    const id = b.dataset.appr;
+    if (!confirm('Approve this period and queue every wave with the six offers as they stand? Messages only leave while Sending is on.')) return;
     $('#op-' + id).textContent = 'Queuing…';
     const { data, error } = await sb.rpc('offer_approve', { p_cycle: id });
     if (error) { $('#op-' + id).innerHTML = `<span class="err">${esc(error.message)}</span>`; return; }
     alert(`Queued ${data.queued} messages (${data.skipped_cap} skipped: already had 2 marketing texts that month).`); marketingView('offers');
   });
-  el.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { if (!confirm('Cancel every message in this offer that hasn\'t gone yet?')) return; const { data } = await sb.rpc('campaign_cancel', { p_campaign: b.dataset.cancel }); alert(`${data} messages cancelled.`); marketingView('offers'); });
+  el.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { if (!confirm('Cancel every message in this period that hasn\'t gone yet?')) return; const { data } = await sb.rpc('campaign_cancel', { p_campaign: b.dataset.cancel }); alert(`${data} messages cancelled.`); marketingView('offers'); });
 }
 
 /* ---------- flows ---------- */
