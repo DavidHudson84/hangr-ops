@@ -51,6 +51,15 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   Nothing writes back to Employment Hero.
 - Store screen's Counter wage % tile reads `v_labour_week` (admins only; RLS hides labour from store managers).
 
+## Org chart and role cards (module B4, 26 Nov 2026; admin only, `roles.js`)
+- Labour > Org chart (`#/labour/org`) and one role card per position (`#/labour/role/<id>`).
+- `positions`: code, title, area, labour section, store, reports_to, fte (what the job needs), award, purpose, responsibilities[], standards[], kpis[{label,target,metric}], source, status draft/approved, sort.
+- `position_holders`: position, EH employee id, share (split someone across two positions). No pay detail stored.
+- `v_staff_cost` (security invoker over admin-only `labour_rates`): cost and paid hours a week per person over the last ~9 weeks of pay runs.
+- KPI `metric` keys show live figures: `plant`, `stream:<shirts|dry_cleaning|wash_fold|restoration>`, `store:<code>`, `drd`, `yoy:<retail|commercial|restoration|dr_drapes>`, `yoy:retail:<ALP|SED|WER|BUT|KIN>`.
+- Seeded 26 Nov 2026 as DRAFT from the OneDrive PDs; FTE seeded from paid hours. Flags: vacant, paid hours >15% over FTE, anyone paid over 45 h/wk, staff paid but in no position.
+- Staff and store managers can't see cards yet (RLS is admin only).
+
 ## $ per order (26 Nov 2026)
 - Sales Incoming "orders" are service lines (each service on a ticket counts once, ~1.45 per real ticket), so never quote
   sales / those orders as the average order. The average ticket comes from Customer Orders: `dash_ticket_weeks` (retail
