@@ -5,7 +5,7 @@
    Sections: home section per person, per-shift moves, location mapping sign-off.
    Labour comes from Employment Hero (read-only, daily pull); nothing here writes back to it. */
 
-const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections']];
+const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['roster', 'Roster plan'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections']];
 const SECTION_NAMES = {
   shirts: 'Shirts', pressing: 'Pressing / finishing', dc_production: 'Dry cleaning production', wash_fold: 'Wash & fold / DRYZ',
   restoration: 'Restoration', plant_shared: 'Plant shared (front desk, scanning, juniors, management)', delivery: 'Delivery / drivers',
@@ -42,7 +42,7 @@ async function labourView(tab = 'plant', arg) {
     <span class="note">Employment Hero, pulled daily at 6:15am. Cost = wages + super. WorkCover not included.</span></div>
   <div class="row" style="margin-bottom:12px">${LB_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/labour/${k}">${t}</a>`).join('')}</div>
   <div id="lb"><p class="note">Loading…</p></div>`;
-  const fn = { plant: lbPlant, stores: lbStores, drdrapes: lbDrd, sections: lbSections }[tab] || lbPlant;
+  const fn = { plant: lbPlant, stores: lbStores, roster: lbRoster, drdrapes: lbDrd, sections: lbSections }[tab] || lbPlant;
   await fn($('#lb'), arg);
 }
 
@@ -236,4 +236,67 @@ async function lbSections(el, who) {
     });
     $('#shiftCard').scrollIntoView({ behavior: 'smooth' });
   }
+}
+
+/* ---------- roster plan (B3) ---------- */
+const STREAM_NAMES = { shirts: 'Shirts', dry_cleaning: 'Dry cleaning (production + pressing)', wash_fold: 'Wash & fold, linen, InLaundry' };
+const OH_NAMES = { plant_shared: 'Plant shared', delivery: 'Plant delivery', restoration: 'Restoration', admin: 'Office / admin' };
+const DOW = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const monday = d => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return iso(x); };
+
+async function lbRoster(el, wkSel) {
+  const thisMon = monday(iso(new Date()));
+  const wk = wkSel || addDays(thisMon, 7);
+  const { data: P, error } = await sb.rpc('roster_plan', { p_org: S.org.id, p_week: wk });
+  if (error) { el.innerHTML = `<div class="card err">${esc(error.message)}</div>`; return; }
+  const T = P.targets || {};
+  const hrs = v => v == null ? '–' : Number(v).toFixed(0);
+  const diff = (a, b) => a == null || b == null ? '<span class="mu">–</span>' : `<span class="${a - b > 0 ? 'dn' : 'up'}">${a - b > 0 ? '+' : ''}${(a - b).toFixed(0)}</span>`;
+  const streams = P.streams || [], oh = P.overhead || [], stores = P.stores || [];
+  const needN = streams.reduce((a, r) => a + (+r.need_normal || 0), 0), needT = streams.reduce((a, r) => a + (+r.need_target || 0), 0);
+  const ohH = oh.filter(o => o.st !== 'restoration').reduce((a, o) => a + +o.h4, 0);
+  const ohC = oh.filter(o => o.st !== 'restoration').reduce((a, o) => a + o.h4 * o.cph, 0);
+  const curH = streams.reduce((a, r) => a + (+r.h4 || 0), 0);
+  const curC = streams.reduce((a, r) => a + (+r.h4 || 0) * (+r.cph || 0), 0);
+  const needC = streams.reduce((a, r) => a + (+r.need_normal || 0) * (+r.cph || 0), 0);
+  const fcSales = streams.reduce((a, r) => a + (+r.sales || 0), 0);
+  const weeks = [-7, 0, 7, 14].map(n => addDays(thisMon, n));
+  const intake = P.weekday_intake || {}, wh = P.weekday_hours || {};
+  const whTot = Object.values(wh).reduce((a, b) => a + +b, 0);
+  el.innerHTML = `
+  <div class="row" style="margin-bottom:12px"><span class="note">Sales are loaded to ${fmtD(P.sales_loaded_to)}, so the forecast is the same week last year adjusted by the trend in the latest 12 weeks loaded. It sharpens once the VA backfills Sales Incoming.</span><span class="sp"></span>
+    <select id="rwk">${weeks.map(w => `<option value="${w}" ${w === wk ? 'selected' : ''}>Week of ${fmtD(w)}${w === thisMon ? ' (this week)' : w === addDays(thisMon, 7) ? ' (next week)' : ''}</option>`).join('')}</select></div>
+  <div class="tiles">
+    <div class="tile"><div class="l">Plant hours needed (normal pace)</div><div class="v">${hrs(needN + ohH)}</div><div class="d mu">${hrs(needT + ohH)} at target pace</div></div>
+    <div class="tile"><div class="l">Average week, last 4 weeks</div><div class="v">${hrs(curH + ohH)}</div><div class="d">${diff(curH, needN)} hours on the production lines</div></div>
+    <div class="tile"><div class="l">${curC >= needC ? 'Over the plan by' : 'Under the plan by'}</div><div class="v">${money(Math.abs(curC - needC))}</div><div class="d mu">a week on the production lines, at each section's cost per hour</div></div>
+    <div class="tile"><div class="l">Plant wage % at the plan</div><div class="v">${fcSales ? wTxt((needC + ohC) / fcSales) : '–'}</div><div class="d mu">target ${T.plant_wage_pct ?? '–'}% · now ${fcSales ? ((curC + ohC) / fcSales * 100).toFixed(1) + '%' : '–'}</div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><h2>Plant, week of ${fmtD(P.week_start)} <small>hours needed for the forecast work against what the plant has been working</small></h2><div class="scroll"><table>
+    <tr><th>Stream</th><th>Forecast pieces</th><th>Forecast value</th><th>Normal pace</th><th>Hours needed</th><th>At target pace</th><th>Avg last 4 wks</th><th>Last week</th><th>Over (+) / under</th><th>$ a week</th></tr>
+    ${streams.map(r => `<tr><td>${esc(STREAM_NAMES[r.stream] || r.stream)}<div class="note">${esc(r.basis)}</div></td><td>${num(r.pieces)}</td><td>${money(r.sales)}</td><td>${r.pph_normal}/hr</td><td><b>${hrs(r.need_normal)}</b></td><td>${hrs(r.need_target)} <span class="note">(${r.pph_target}/hr)</span></td>
+      <td>${hrs(r.h4)}</td><td>${hrs(r.hl)}</td><td>${diff(+r.h4, +r.need_normal)}</td><td>${r.h4 != null && r.cph ? money((r.h4 - r.need_normal) * r.cph) : '–'}</td></tr>`).join('')}
+    ${oh.map(o => `<tr><td class="mu">${esc(OH_NAMES[o.st] || o.st)}</td><td colspan="3" class="note" style="text-align:left">${o.st === 'restoration' ? 'job-driven; plan from the restoration board' : 'not driven by pieces; held at the 4-week average'}</td><td>${hrs(o.h4)}</td><td></td><td>${hrs(o.h4)}</td><td>${hrs(o.hl)}</td><td></td><td></td></tr>`).join('')}
+  </table></div>
+  <p class="note">Normal pace is the median week's pieces per hour since November 2025; target pace is the best quarter of weeks. Restoration isn't in the plant total because its work comes by the job, not by the piece.</p></div>
+  <div class="card"><h2>Which days <small>share of the plant's hours vs share of retail work coming in, by weekday</small></h2><div class="scroll"><table>
+    <tr><th></th>${[1, 2, 3, 4, 5, 6].map(d => `<th>${DOW[d]}</th>`).join('')}</tr>
+    <tr><td>Plant hours (last 8 weeks)</td>${[1, 2, 3, 4, 5, 6].map(d => `<td>${whTot ? ((+wh[d] || 0) / whTot * 100).toFixed(0) + '%' : '–'}</td>`).join('')}</tr>
+    <tr><td>Retail work in (Customer Orders)</td>${[1, 2, 3, 4, 5, 6].map(d => `<td>${intake[d] != null ? (+intake[d]).toFixed(0) + '%' : '–'}</td>`).join('')}</tr>
+    <tr><td>Hours needed by day (normal pace)</td>${[1, 2, 3, 4, 5, 6].map(d => { if (d === 6) return `<td class="mu">as now</td>`; const prev = d === 1 ? (+intake[5] || 0) + (+intake[6] || 0) + (+intake[7] || 0) : (+intake[d - 1] || 0); return `<td>${hrs(needN * prev / 100)}</td>`; }).join('')}</tr>
+  </table></div><p class="note">Work dropped off one day is mostly processed the next, so "hours needed by day" follows the previous working day's intake (Friday to Sunday drop-offs land on Monday; Saturday stays as it is now). Commercial work isn't in the intake split yet. Shared, delivery and office hours are on top.</p></div>
+  <div class="card"><h2>Stores, week of ${fmtD(P.week_start)} <small>counter hours the forecast sales can carry at ${T.store_wage_pct ?? 25}% against the Employment Hero roster</small></h2><div class="scroll"><table>
+    <tr><th>Store</th><th>Forecast retail sales</th><th>Rostered (EH)</th><th>Worked, avg 4 wks</th><th>Affordable at ${T.store_wage_pct ?? 25}%</th><th>Roster over (+) / under</th><th>$ a week</th></tr>
+    ${stores.map(r => { const base = r.rostered ?? r.h4; return `<tr><td>${esc(r.name)}${r.salaried ? `<div class="note">after ${money(r.salaried)} a week of salaried cost</div>` : ''}</td><td>${money(r.sales_fc)}</td><td>${r.rostered != null ? hrs(r.rostered) : '<span class="mu">not rostered yet</span>'}</td><td>${hrs(r.h4)}</td><td><b>${hrs(r.affordable)}</b></td><td>${diff(+base, +r.affordable)}</td><td>${r.cph ? money((base - r.affordable) * r.cph) : '–'}</td></tr>`; }).join('')}
+  </table></div><p class="note">Where the week isn't rostered yet, the comparison uses the 4-week average worked. Stores need minimum cover to open, so treat "under" as room, not a target. Hours here are clocked hours; salaried pay is taken off the budget first.</p></div>
+  <div class="card"><h2>Standards</h2><div class="row">
+    ${Object.keys(T).sort().map(k => `<div><label>${esc(k.replace('pph_normal_', 'Normal pieces/hr: ').replace('pph_target_', 'Target pieces/hr: ').replace('store_wage_pct', 'Store wage % target').replace('plant_wage_pct', 'Plant wage % target').replace('dry_cleaning', 'dry cleaning').replace('wash_fold', 'wash & fold'))}</label><input data-tg="${k}" type="number" step="0.1" value="${T[k]}" style="width:110px"></div>`).join('')}
+    <button class="btn ghost" id="tgSave" style="align-self:flex-end">Save standards</button><span id="tgMsg" class="note" style="align-self:flex-end"></span></div></div>`;
+  $('#rwk').onchange = () => { location.hash = '#/labour/roster/' + $('#rwk').value; };
+  $('#tgSave').onclick = async () => {
+    const rows = [...el.querySelectorAll('[data-tg]')].map(i => ({ org_id: S.org.id, key: i.dataset.tg, value: +i.value, updated_at: new Date().toISOString() }));
+    const { error } = await sb.from('roster_targets').upsert(rows);
+    $('#tgMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
+    if (!error) lbRoster(el, wk);
+  };
 }
