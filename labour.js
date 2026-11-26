@@ -5,7 +5,7 @@
    Sections: home section per person, per-shift moves, location mapping sign-off.
    Labour comes from Employment Hero (read-only, daily pull); nothing here writes back to it. */
 
-const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['roster', 'Roster plan'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections']];
+const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['roster', 'Roster plan'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections'], ['org', 'Org chart']];
 const SECTION_NAMES = {
   shirts: 'Shirts', pressing: 'Pressing / finishing', dc_production: 'Dry cleaning production', wash_fold: 'Wash & fold / DRYZ',
   restoration: 'Restoration', plant_shared: 'Plant shared (front desk, scanning, juniors, management)', delivery: 'Delivery / drivers',
@@ -40,9 +40,9 @@ async function labourView(tab = 'plant', arg) {
   app.innerHTML = `
   <div class="row" style="margin-bottom:10px"><h2 style="margin:0;font-size:18px">Labour</h2><span class="sp"></span>
     <span class="note">Employment Hero, pulled daily at 6:15am. Cost = wages + super. WorkCover not included.</span></div>
-  <div class="row" style="margin-bottom:12px">${LB_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/labour/${k}">${t}</a>`).join('')}</div>
+  <div class="row" style="margin-bottom:12px">${LB_TABS.map(([k, t]) => `<a class="btn ${k === tab || (k === 'org' && tab === 'role') ? '' : 'ghost'}" style="padding:5px 10px" href="#/labour/${k}">${t}</a>`).join('')}</div>
   <div id="lb"><p class="note">Loading…</p></div>`;
-  const fn = { plant: lbPlant, stores: lbStores, roster: lbRoster, drdrapes: lbDrd, sections: lbSections }[tab] || lbPlant;
+  const fn = { plant: lbPlant, stores: lbStores, roster: lbRoster, drdrapes: lbDrd, sections: lbSections, org: lbOrg, role: lbRole }[tab] || lbPlant;
   await fn($('#lb'), arg);
 }
 
