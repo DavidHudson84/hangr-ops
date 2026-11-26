@@ -71,6 +71,7 @@ function buildNav() {
   if (isAdmin()) links.push(['#/group', 'Group']);
   myStores().filter(s => s.active).forEach(s => links.push([`#/store/${s.code}`, s.name]));
   if (isAdmin() || myStores().length) links.push(['#/customers', 'Customers']);
+  if (isAdmin()) links.push(['#/accounts', 'Accounts']);
   if (isAdmin()) links.push(['#/marketing', 'Marketing']);
   if (isAdmin()) links.push(['#/labour', 'Labour']);
   if (canUpload()) links.push(['#/upload', 'Upload']);
@@ -226,6 +227,7 @@ function route() {
   if (h[0] === 'store' && h[1]) return go(storeView, h[1], h[2]);
   if (h[0] === 'upload' && canUpload()) return go(uploadView);
   if (h[0] === 'marketing' && isAdmin()) return go(marketingView, h[1]);
+  if (h[0] === 'accounts' && isAdmin()) return go(accountsView, h[1]);
   if (h[0] === 'labour' && isAdmin()) return go(labourView, h[1], h[2]);
   if (h[0] === 'customers') return go(customersView, h[1] ? decodeURIComponent(h[1]) : '');
   if (h[0] === 'customer' && h[1]) return go(customerView, h[1]);

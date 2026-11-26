@@ -23,7 +23,9 @@ async function orgData(fresh) {
   const active = (st.data || []).filter(r => !r.end_date || r.end_date >= cutoff);
   const pos = p.data || [], hold = h.data || [];
   for (const x of pos) {
-    x.holders = hold.filter(r => r.position_id === x.id).map(r => ({ ...r, name: staff[r.eh_employee_id]?.name || ('#' + r.eh_employee_id), c: cost[r.eh_employee_id] }));
+    x.holders = hold.filter(r => r.position_id === x.id).map(r => r.eh_employee_id == null
+      ? { ...r, ext: true, name: r.ext_name, c: { cost_pw: r.ext_cost_pw, hours_pw: r.ext_hours_pw } }
+      : { ...r, name: staff[r.eh_employee_id]?.name || ('#' + r.eh_employee_id), c: cost[r.eh_employee_id] });
     x.cost_pw = x.holders.reduce((a, r) => a + (+r.c?.cost_pw || 0) * +r.share, 0);
     x.hours_pw = x.holders.reduce((a, r) => a + (+r.c?.hours_pw || 0) * +r.share, 0);
   }
@@ -79,10 +81,11 @@ const statusChip2 = s => s === 'approved' ? '<span class="chip" style="backgroun
 
 /* ---------- org chart ---------- */
 async function lbOrg(el) {
-  const [O, M] = await Promise.all([orgData(true), posMetrics().catch(() => ({}))]);
+  const [O, M, Y] = await Promise.all([orgData(true), posMetrics().catch(() => ({})), sb.rpc('sales_yoy', { p_org: S.org.id }).then(r => r.data, () => null)]);
+  el.__sales = salesPerWeek(Y);
   const kids = id => O.pos.filter(p => (p.reports_to || null) === id && p.id !== id);
   const roots = O.pos.filter(p => !p.reports_to || !O.byId[p.reports_to]);
-  const placed = new Set(O.hold.map(h => h.eh_employee_id));
+  const placed = new Set(O.hold.filter(h => h.eh_employee_id != null).map(h => h.eh_employee_id));
   const unplaced = O.active.filter(s => !placed.has(s.eh_employee_id) && (O.cost[s.eh_employee_id]?.cost_pw > 0));
   const totCost = O.pos.reduce((a, p) => a + p.cost_pw, 0);
   const vacant = O.pos.filter(p => !p.holders.length);
@@ -116,8 +119,11 @@ async function lbOrg(el) {
     <tr><th>Area</th><th>Positions</th><th>People</th><th>FTE set</th><th>Paid h/wk</th><th>FTE paid</th><th>Cost/wk</th></tr>
     ${byArea.map(r => `<tr><td>${esc(r.name)}</td><td>${r.n}</td><td>${r.ppl}</td><td>${r.fte.toFixed(1)}</td><td>${num(r.h)}</td><td>${(r.h / FULL_WEEK).toFixed(1)}</td><td>${money(r.c)}</td></tr>`).join('')}
     <tr class="tot"><td>Total</td><td>${O.pos.length}</td><td>${placed.size}</td><td>${byArea.reduce((a, r) => a + r.fte, 0).toFixed(1)}</td><td>${num(byArea.reduce((a, r) => a + r.h, 0))}</td><td>${(byArea.reduce((a, r) => a + r.h, 0) / FULL_WEEK).toFixed(1)}</td><td>${money(totCost)}</td></tr>
-  </table></div><p class="note">David and Annalise aren't paid through Employment Hero, so management shows no cost. Paid hours include leave. FTE paid = paid hours ÷ ${FULL_WEEK}. Cost is wages + super; WorkCover isn't in it. Someone in two positions is split by the share on each card.</p></div>
+  </table></div><p class="note">David and Annalise aren't paid through Employment Hero, so management shows no cost. People not on the payroll (e.g. Huward) carry the weekly cost entered on their card. Paid hours include leave. FTE paid = paid hours ÷ ${FULL_WEEK}. Cost is wages + super; WorkCover isn't in it. Someone in two positions is split by the share on each card.</p></div>
+  ${reportingCard(O)}
+  ${planCard(O, el.__sales)}
   <div class="card"><h2>Structure <small>click a position for its role card</small></h2>${roots.map(r => node(r, 0)).join('')}</div>`;
+  wirePlan(el, O);
   $('#addPos').onclick = async () => {
     const { data, error } = await sb.from('positions').insert({ org_id: S.org.id, code: 'new_' + Date.now().toString(36), title: 'New position', area: 'plant', reports_to: O.pos.find(p => p.code === 'gm')?.id || null }).select('id').single();
     if (error) return alert(error.message);
@@ -141,7 +147,7 @@ async function lbRole(el, id) {
   const list = a => (a || []).length ? `<ul style="margin:4px 0 0 18px;padding:0">${a.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="note">None set.</p>';
   const lines = a => (a || []).join('\n');
   const kpiLines = (p.kpis || []).map(k => [k.label, k.target || '', k.metric || ''].join(' | ').replace(/( \| )+$/, '')).join('\n');
-  const placedIds = new Set(p.holders.map(h => h.eh_employee_id));
+  const placedIds = new Set(p.holders.filter(h => !h.ext).map(h => h.eh_employee_id));
   el.innerHTML = `
   <div class="row noprint" style="margin-bottom:10px"><a href="#/labour/org">← Org chart</a><span class="sp" style="flex:1"></span>
     <button class="btn ghost" onclick="window.print()">Print card</button>
@@ -160,10 +166,11 @@ async function lbRole(el, id) {
   <div class="grid g2 noprint">
     <div class="card"><h2>People in this position <small>cost from pay runs, last 9 weeks</small></h2><table>
       <tr><th>Person</th><th>Share</th><th>Paid h/wk</th><th>Cost/wk</th><th></th></tr>
-      ${p.holders.map(h => `<tr><td>${esc(h.name)}</td><td><input data-share="${h.eh_employee_id}" type="number" min="0.1" max="1" step="0.1" value="${h.share}" style="width:64px"></td><td>${+h.c?.cost_pw ? num(h.c.hours_pw) + (+h.c.hours_pw > 45 ? ' <b style="color:var(--warn)">long hours</b>' : '') : '<span class="mu">not paid through Employment Hero</span>'}</td><td>${+h.c?.cost_pw ? money(h.c.cost_pw) : '–'}</td><td><button class="btn ghost" style="padding:2px 8px" data-rm="${h.eh_employee_id}">Remove</button></td></tr>`).join('')}
+      ${p.holders.map(h => `<tr><td>${esc(h.name)}${h.ext ? ' <span class="chip">not on payroll</span>' : ''}</td><td><input data-share="${h.id}" type="number" min="0.1" max="1" step="0.1" value="${h.share}" style="width:64px"></td><td>${h.ext ? (h.c.hours_pw ? num(h.c.hours_pw) : '–') : +h.c?.cost_pw ? num(h.c.hours_pw) + (+h.c.hours_pw > 45 ? ' <b style="color:var(--warn)">long hours</b>' : '') : '<span class="mu">not paid through Employment Hero</span>'}</td><td>${h.ext ? `<input data-extc="${h.id}" type="number" value="${h.c.cost_pw ?? ''}" style="width:80px">` : +h.c?.cost_pw ? money(h.c.cost_pw) : '–'}</td><td><button class="btn ghost" style="padding:2px 8px" data-rm="${h.id}">Remove</button></td></tr>`).join('')}
       <tr class="tot"><td>Total</td><td></td><td>${num(p.hours_pw)}</td><td>${money(p.cost_pw)}</td><td></td></tr></table>
       <p class="note">${p.holders.length ? `${p.fte} FTE set is ${num(p.fte * FULL_WEEK)} hours a week; paid ${num(p.hours_pw)}${hoursFlag(p) ? ' <b style="color:var(--warn)">— more than the job is set at</b>' : ''}.` : ''} Share splits someone across two positions (0.5 = half their cost here).</p>
-      <div class="row"><select id="rcAdd"><option value="">Add a person…</option>${(() => { const where = id => O.pos.filter(x => x.holders.some(h => h.eh_employee_id === id)).map(x => x.title).join(', ');
+      <div class="row"><input id="extName" placeholder="Not on payroll: name" style="width:170px"><input id="extCost" type="number" placeholder="$ a week" style="width:100px"><button class="btn ghost" id="extAdd">Add</button></div>
+      <div class="row" style="margin-top:6px"><select id="rcAdd"><option value="">Add a person…</option>${(() => { const where = id => O.pos.filter(x => x.holders.some(h => h.eh_employee_id === id)).map(x => x.title).join(', ');
         const c = O.active.filter(s => !placedIds.has(s.eh_employee_id)).map(s => ({ s, w: where(s.eh_employee_id) }));
         const opt = ({ s, w }) => `<option value="${s.eh_employee_id}">${esc(s.name)}${w ? ' (in ' + esc(w) + ')' : ''}</option>`;
         return `<optgroup label="Not in a position">${c.filter(x => !x.w).map(opt).join('')}</optgroup><optgroup label="Already in a position (adds a second one)">${c.filter(x => x.w).map(opt).join('')}</optgroup>`; })()}</select></div></div>
@@ -216,6 +223,94 @@ async function lbRole(el, id) {
     if (error) return alert(error.message);
     reload();
   };
-  el.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { await sb.from('position_holders').delete().eq('position_id', p.id).eq('eh_employee_id', +b.dataset.rm); reload(); });
-  el.querySelectorAll('[data-share]').forEach(i => i.onchange = async () => { await sb.from('position_holders').update({ share: Math.min(1, Math.max(0.1, +i.value || 1)) }).eq('position_id', p.id).eq('eh_employee_id', +i.dataset.share); reload(); });
+  el.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { await sb.from('position_holders').delete().eq('id', b.dataset.rm); reload(); });
+  el.querySelectorAll('[data-share]').forEach(i => i.onchange = async () => { await sb.from('position_holders').update({ share: Math.min(1, Math.max(0.1, +i.value || 1)) }).eq('id', i.dataset.share); reload(); });
+  el.querySelectorAll('[data-extc]').forEach(i => i.onchange = async () => { await sb.from('position_holders').update({ ext_cost_pw: +i.value || 0 }).eq('id', i.dataset.extc); reload(); });
+  $('#extAdd').onclick = async () => {
+    const n = $('#extName').value.trim(); if (!n) return;
+    const { error } = await sb.from('position_holders').insert({ org_id: S.org.id, position_id: p.id, ext_name: n, ext_cost_pw: +$('#extCost').value || 0 });
+    if (error) return alert(error.message);
+    reload();
+  };
+}
+
+/* ---------- who reports to whom ---------- */
+function reportingCard(O) {
+  const ppl = p => p.holders.length ? p.holders.map(h => esc(h.name)).join(', ') : '<span class="dn">vacant</span>';
+  const managers = O.pos.filter(p => O.pos.some(x => x.reports_to === p.id));
+  const count = id => O.pos.filter(x => x.reports_to === id).reduce((a, x) => a + x.holders.length + count(x.id), 0);
+  return `<div class="card"><h2>Who reports to whom <small>direct reports; the last column counts everyone underneath</small></h2><div class="scroll"><table>
+    <tr><th>Manager</th><th>Held by</th><th style="text-align:left">Direct reports (position: people)</th><th>Everyone under</th></tr>
+    ${managers.map(m => `<tr><td><a href="#/labour/role/${m.id}">${esc(m.title)}</a></td><td>${ppl(m)}</td>
+      <td style="text-align:left;white-space:normal">${O.pos.filter(x => x.reports_to === m.id).map(x => `<div><a href="#/labour/role/${x.id}">${esc(x.title)}</a>: ${ppl(x)}</div>`).join('')}</td><td>${count(m.id)}</td></tr>`).join('')}
+  </table></div><p class="note">Change a line on the role card (Reports to). Draft until each card is approved.</p></div>`;
+}
+
+/* ---------- what-if plan ---------- */
+function salesPerWeek(Y) {
+  if (!Y?.rows) return null;
+  const g = k => Y.rows.filter(r => k(r.stream)).reduce((a, r) => a + (+r.w12 || 0), 0) / 12;
+  return { retail: g(s => s.startsWith('retail:')), mdc: g(s => s.startsWith('retail:') || s === 'commercial' || s === 'restoration'), drd: g(s => s === 'dr_drapes'), to: Y.last_week_end };
+}
+function planCost(p, O) {
+  const fte = +p.fte || 0, plan = p.plan_fte == null ? fte : +p.plan_fte;
+  if (p.plan_fte == null || (plan === fte && p.cost_pw > 0)) return p.cost_pw;
+  if (p.cost_pw > 0 && fte > 0 && p.plan_rate == null) return p.cost_pw * plan / fte;
+  const same = O.pos.filter(x => x.area === p.area && x.hours_pw > 0);
+  const cph = +p.plan_rate || (same.length ? same.reduce((a, x) => a + x.cost_pw, 0) / same.reduce((a, x) => a + x.hours_pw, 0) : 35);
+  if (p.cost_pw > 0 && fte > 0) return p.cost_pw + (plan - fte) * FULL_WEEK * cph;
+  return plan * FULL_WEEK * cph;
+}
+function planCard(O, SL) {
+  const rows = O.pos.map(p => ({ p, now: p.cost_pw, plan: planCost(p, O) }));
+  const bucket = (f, k) => rows.filter(r => f(r.p)).reduce((a, r) => a + r[k], 0);
+  const isD = p => p.area === 'dr_drapes', isS = p => p.area === 'stores', notD = p => !isD(p);
+  const W = (lab, sales) => sales ? wTxt(lab / sales, .30, .35) : '–';
+  const changed = rows.filter(r => Math.abs(r.plan - r.now) >= 1);
+  const dNow = bucket(notD, 'now'), dPlan = bucket(notD, 'plan');
+  const allNow = bucket(() => true, 'now'), allPlan = bucket(() => true, 'plan');
+  return `<div class="card" id="planCard"><h2>Plan changes <small>type a planned FTE to see what it does to wages; nothing changes until you apply it</small></h2>
+    <div class="tiles">
+      <div class="tile"><div class="l">MDC labour a week (ex Dr Drapes)</div><div class="v">${money(dPlan)}</div><div class="d">${pctTxt(dNow ? dPlan / dNow - 1 : null)} · ${dPlan - dNow >= 0 ? '+' : '-'}${money(Math.abs(dPlan - dNow))} on now</div></div>
+      <div class="tile"><div class="l">MDC wage %</div><div class="v">${SL ? W(dPlan, SL.mdc) : '–'}</div><div class="d mu">now ${SL ? W(dNow, SL.mdc) : '–'} on ${SL ? money(SL.mdc) : '–'} sales a week</div></div>
+      <div class="tile"><div class="l">Stores wage %</div><div class="v">${SL ? W(bucket(isS, 'plan'), SL.retail) : '–'}</div><div class="d mu">now ${SL ? W(bucket(isS, 'now'), SL.retail) : '–'} on ${SL ? money(SL.retail) : '–'} retail</div></div>
+      <div class="tile"><div class="l">Dr Drapes wage %</div><div class="v">${SL ? W(bucket(isD, 'plan'), SL.drd) : '–'}</div><div class="d mu">now ${SL ? W(bucket(isD, 'now'), SL.drd) : '–'} on ${SL ? money(SL.drd) : '–'}</div></div>
+      <div class="tile"><div class="l">Change over a year</div><div class="v">${allPlan - allNow >= 0 ? '+' : '-'}${money(Math.abs(allPlan - allNow) * 52)}</div><div class="d mu">${changed.length} position${changed.length === 1 ? '' : 's'} changed</div></div>
+    </div>
+    <div class="scroll" style="margin-top:10px"><table>
+      <tr><th>Position</th><th>People</th><th>FTE now</th><th>Cost/wk now</th><th>Planned FTE</th><th>$/hr for added hours</th><th>Planned cost/wk</th><th>Change/wk</th><th style="text-align:left">Note</th></tr>
+      ${rows.map(({ p, now, plan }) => `<tr><td><a href="#/labour/role/${p.id}">${esc(p.title)}</a></td><td>${p.holders.length}</td><td>${p.fte}</td><td>${money(now)}</td>
+        <td><input data-pf="${p.id}" type="number" step="0.1" min="0" value="${p.plan_fte ?? ''}" placeholder="${p.fte}" style="width:70px"></td>
+        <td><input data-pr="${p.id}" type="number" step="0.5" min="0" value="${p.plan_rate ?? ''}" placeholder="${p.hours_pw > 0 ? (p.cost_pw / p.hours_pw).toFixed(0) : 'avg'}" style="width:70px"></td>
+        <td>${money(plan)}</td><td>${Math.abs(plan - now) < 1 ? '<span class="mu">–</span>' : `<span class="${plan > now ? 'dn' : 'up'}">${plan > now ? '+' : '-'}${money(Math.abs(plan - now))}</span>`}</td>
+        <td style="text-align:left"><input data-pn="${p.id}" value="${esc(p.plan_note || '')}" placeholder="why" style="width:180px"></td></tr>`).join('')}
+    </table></div>
+    <div class="row" style="margin-top:8px"><button class="btn" id="planSave">Save plan and recalculate</button><button class="btn ghost" id="planApply">Apply plan to the org chart</button><button class="btn ghost" id="planClear">Clear plan</button><span id="planMsg" class="note"></span></div>
+    <p class="note">Cutting FTE scales a position's current pay-run cost down in proportion. Added hours are costed at the $/hr you enter, or else the position's own current rate, or the average for its area if it's vacant or new. Sales are the 12-week weekly average from Xero, ex GST${SL ? ', to ' + fmtD(SL.to) : ''}. MDC sales are retail, commercial and restoration; MDC labour is every position outside Dr Drapes, stores included. WorkCover isn't in any figure. For a new role, use Add position, set its FTE to 0 on the card, then give it a planned FTE here.</p></div>`;
+}
+function wirePlan(el, O) {
+  const read = () => O.pos.map(p => {
+    const v = el.querySelector(`[data-pf="${p.id}"]`).value, r = el.querySelector(`[data-pr="${p.id}"]`).value, n = el.querySelector(`[data-pn="${p.id}"]`).value.trim();
+    return { id: p.id, plan_fte: v === '' ? null : +v, plan_rate: r === '' ? null : +r, plan_note: n || null };
+  });
+  const saveAll = async rows => {
+    for (const r of rows) {
+      const p = O.byId[r.id];
+      if ((p.plan_fte ?? null) == r.plan_fte && (p.plan_rate ?? null) == r.plan_rate && (p.plan_note || null) == r.plan_note) continue;
+      const { error } = await sb.from('positions').update({ plan_fte: r.plan_fte, plan_rate: r.plan_rate, plan_note: r.plan_note }).eq('id', r.id);
+      if (error) throw error;
+    }
+  };
+  $('#planSave').onclick = async () => { try { await saveAll(read()); lbOrg(el); } catch (e) { $('#planMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; } };
+  $('#planApply').onclick = async () => {
+    const rows = read().filter(r => r.plan_fte != null);
+    if (!rows.length) return alert('No planned FTE to apply.');
+    if (!confirm(`Set FTE to the planned figure on ${rows.length} position(s)? This changes the org chart only, not anyone's hours or pay.`)) return;
+    try {
+      await saveAll(read());
+      for (const r of rows) { const { error } = await sb.from('positions').update({ fte: r.plan_fte, plan_fte: null, updated_at: new Date().toISOString() }).eq('id', r.id); if (error) throw error; }
+      lbOrg(el);
+    } catch (e) { $('#planMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+  $('#planClear').onclick = async () => { if (!confirm('Clear every planned FTE, rate and note?')) return; await sb.from('positions').update({ plan_fte: null, plan_rate: null, plan_note: null }).eq('org_id', S.org.id); lbOrg(el); };
 }
