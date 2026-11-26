@@ -72,6 +72,7 @@ function buildNav() {
   myStores().filter(s => s.active).forEach(s => links.push([`#/store/${s.code}`, s.name]));
   if (isAdmin() || myStores().length) links.push(['#/customers', 'Customers']);
   if (isAdmin()) links.push(['#/marketing', 'Marketing']);
+  if (isAdmin()) links.push(['#/labour', 'Labour']);
   if (canUpload()) links.push(['#/upload', 'Upload']);
   if (isAdmin()) links.push(['#/admin', 'Admin']);
   $('#nav').innerHTML = links.map(([h, t]) => `<a href="${h}">${esc(t)}</a>`).join('');
@@ -167,6 +168,7 @@ function route() {
   if (h[0] === 'store' && h[1]) return go(storeView, h[1], h[2]);
   if (h[0] === 'upload' && canUpload()) return go(uploadView);
   if (h[0] === 'marketing' && isAdmin()) return go(marketingView, h[1]);
+  if (h[0] === 'labour' && isAdmin()) return go(labourView, h[1], h[2]);
   if (h[0] === 'customers') return go(customersView, h[1] ? decodeURIComponent(h[1]) : '');
   if (h[0] === 'customer' && h[1]) return go(customerView, h[1]);
   if (h[0] === 'admin' && isAdmin()) return go(adminView);
@@ -247,13 +249,18 @@ async function storeView(code, weekSel) {
   if (!ser.length) { app.innerHTML = `<div class="card">No sales loaded for ${esc(store.name)} yet.</div>`; return; }
   const wk = weekSel || ser[ser.length - 1].week_end;
   const st = stats(ser, wk), c = st.cur || {};
-  const [svc, mon, best, fresh, drift, comm] = await Promise.all([
+  const [svc, mon, best, fresh, drift, comm, lab] = await Promise.all([
     sb.from('v_sales_week').select('service,channel,sales_gross,orders,pieces,week_end').eq('store_id', store.id).gte('week_end', addDays(wk, -84)).lte('week_end', wk),
     months(),
     sb.from('v_customers').select('full_name,mobile,lifetime_spend,spend_12m,orders_12m,last_order,tier,days_since').eq('store_id', store.id).eq('is_commercial', false).order('spend_12m', { ascending: false }).limit(15),
     sb.from('v_customers').select('full_name,mobile,first_order,lifetime_spend,order_count').eq('store_id', store.id).eq('is_commercial', false).not('first_order', 'is', null).gt('order_count', 0).order('first_order', { ascending: false }).limit(15),
     sb.from('v_customers').select('full_name,mobile,lifetime_spend,last_order,days_since,tier,order_count').eq('store_id', store.id).eq('is_commercial', false).gte('lifetime_spend', 500).gte('days_since', 45).lte('days_since', 180).order('lifetime_spend', { ascending: false }).limit(15),
-    sb.from('commentary').select('*').eq('store_id', store.id).eq('week_end', wk).maybeSingle()]);
+    sb.from('commentary').select('*').eq('store_id', store.id).eq('week_end', wk).maybeSingle(),
+    isAdmin() ? sb.from('v_labour_week').select('week_end,cost').eq('store_id', store.id).gte('week_end', addDays(wk, -77)).lte('week_end', wk) : Promise.resolve({ data: [] })]);
+  const labW = new Map(); for (const r of lab.data || []) labW.set(r.week_end, (labW.get(r.week_end) || 0) + +(r.cost || 0));
+  const wageCur = labW.has(wk) && c.retail ? labW.get(wk) / c.retail : null;
+  const wPrior = ser.filter(w => w.week_end <= wk && labW.has(w.week_end) && w.retail).slice(-12);
+  const wage12 = wPrior.length ? wPrior.reduce((a, w) => a + labW.get(w.week_end), 0) / wPrior.reduce((a, w) => a + w.retail, 0) : null;
   // services: this week vs prior 12-week average
   const sv = new Map();
   for (const r of svc.data || []) {
@@ -275,7 +282,7 @@ async function storeView(code, weekSel) {
     <div class="tile"><div class="l">Orders</div><div class="v">${num(c.r_orders)}</div><div class="d mu">${c.r_orders ? money(c.retail / c.r_orders, 2) : '–'} per order</div></div>
     <div class="tile"><div class="l">Pieces</div><div class="v">${num(c.r_pieces)}</div><div class="d mu">${c.r_pieces ? money(c.retail / c.r_pieces, 2) : '–'} per piece · ${c.r_orders ? (c.r_pieces / c.r_orders).toFixed(2) : '–'} per order</div></div>
     <div class="tile"><div class="l">Commercial booked here</div><div class="v">${money(c.commercial)}</div><div class="d mu">on-account work, not in retail</div></div>
-    <div class="tile"><div class="l">Wage %</div><div class="v mu">–</div><div class="d mu">arrives with the labour module</div></div>
+    <div class="tile"><div class="l">Counter wage %</div><div class="v">${wageCur != null ? (wageCur * 100).toFixed(1) + '%' : '<span class="mu">–</span>'}</div><div class="d mu">${wage12 != null ? `12-wk ${(wage12 * 100).toFixed(1)}% · ` : ''}${labW.has(wk) ? money(labW.get(wk)) + ' labour' : 'no labour data this week'}</div></div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Retail sales by week</h2>${barChart(withRolling(ser.slice(-52), 'retail'), 'retail', 'avg')}</div>
   <div class="grid g2">

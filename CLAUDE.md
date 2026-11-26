@@ -38,3 +38,15 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   `offer_approve` (queues four quadrant waves). One-off: `campaign_preview` / `campaign_create` (pending) /
   `campaign_approve` / `campaign_cancel`. Results: `v_sms_outcomes`, `sms_results` (orders within 30 days, sent vs held back).
 - Marketing cap: `marketing_cap_per_month` (2) marketing texts in any 30 days; flows pause 14 days either side of an offer text.
+
+## Labour (module B2, built 26 Nov 2026; admin only, `labour.js`)
+- Data from AIOS `scripts/hangr_ops/labour_pull.py` (Employment Hero, read-only) and `finance_pull.py` (Xero 41450 Dr Drapes
+  Revenue + restoration income accounts, read-only; DrapesQuotePro `hangr_drd_weekly` RPC) into `fin_weekly`, daily 6:15am.
+- `v_labour_week` (Mon-Sun, labelled by the Sunday like sales). `services.section` maps POS services to plant streams
+  (shirts, dry_cleaning, wash_fold, restoration, none); DRAFT until David confirms. Labour sections dc_production + pressing = dry_cleaning stream.
+- Tabs: Plant (stream hours, labour, sales, pieces/hr, labour/piece, wage %), Stores (counter labour vs retail sales, rostered),
+  Dr Drapes (weekly on Drapr finished value from 19 Jul 2026, 4- and 12-week rolling on Xero billed), Sections.
+- Sections: person's home section (`labour_staff`, home_source 'manual' sticks), single-shift moves in `labour_shift_overrides`
+  (kept across the daily window replace because they key on the EH timesheet id), location mapping + `signed_off`.
+  Nothing writes back to Employment Hero.
+- Store screen's Counter wage % tile reads `v_labour_week` (admins only; RLS hides labour from store managers).
