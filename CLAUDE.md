@@ -59,6 +59,13 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 - KPI `metric` keys show live figures: `plant`, `stream:<shirts|dry_cleaning|wash_fold|restoration>`, `store:<code>`, `drd`, `yoy:<retail|commercial|restoration|dr_drapes>`, `yoy:retail:<ALP|SED|WER|BUT|KIN>`.
 - Seeded 26 Nov 2026 as DRAFT from the OneDrive PDs; FTE seeded from paid hours. Flags: vacant, paid hours >15% over FTE, anyone paid over 45 h/wk, staff paid but in no position.
 - Staff and store managers can't see cards yet (RLS is admin only).
+- Holders can be off-payroll (`position_holders.eh_employee_id` null, `ext_name`, `ext_cost_pw`). Holder rows are keyed by `id`.
+- Plan changes: `positions.plan_fte`, `plan_rate`, `plan_note`; the org chart costs them and shows wage % against 12-week Xero sales (`sales_yoy`). Apply copies plan_fte into fte.
+
+## Account health (module A3, 26 Nov 2026; admin only, `accounts.js`)
+- `fin_account_weekly` (week_end, Xero contact_id, stream commercial/restoration/dr_drapes, amount ex GST, invoices) loaded by AIOS `scripts/hangr_ops/finance_pull.py` through `ingest_accounts` (loader key); `accounts` holds name, segment, owner, watch, note (screen edits stick; the loader only fills blanks).
+- `account_health(p_org, p_key)`: recent 4 weeks vs the prior 12 (8 vs 24 when billed in fewer than 10 of the last 26 weeks) and vs last year. Statuses: stopped, down (<75%), new (first invoice in 16 weeks), up (>125%), steady, dormant; down/up need a usual of $500+ per window.
+
 
 ## $ per order (26 Nov 2026)
 - Sales Incoming "orders" are service lines (each service on a ticket counts once, ~1.45 per real ticket), so never quote
