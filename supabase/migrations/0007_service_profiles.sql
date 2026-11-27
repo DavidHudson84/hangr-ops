@@ -263,3 +263,9 @@ grant execute on function public.service_mix(uuid, int) to authenticated;
 -- 0007d orgs.services_from/to = the periods the service uploads cover (old orders collected in a period carry earlier dates)
 alter table uploads drop constraint if exists uploads_kind_check;
 alter table uploads add constraint uploads_kind_check check (kind in ('sales','orders','customers','services'));
+
+-- 0008_service_totals (28 Nov 2026): public.ingest_service_totals(p_upload, p_rows, p_key).
+-- A "by service and order" upload covering Mon-Sun or a calendar month also writes per-service totals
+-- into sales (grain week/month, period_end = date_to), so plain Sales Incoming is no longer needed.
+-- Where a plain Sales Incoming upload already holds that store and period it only compares and returns
+-- the difference (checked w/e 22 Nov 2026: every store to the cent). A later plain upload still replaces it.

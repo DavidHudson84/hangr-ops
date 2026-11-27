@@ -587,7 +587,7 @@ async function loadServiceOrders(wb, file, from, to, say) {
   const val = (sh, r, c) => { const v = cell(sh, r, c)?.v; return (typeof v === 'string' && v.trim() === '') ? null : v ?? null; };
   const hd = []; for (let c = 0; c <= range.e.c; c++) hd.push(String(val(ws, 3, c) ?? '').trim().toLowerCase());
   const ci = n => hd.indexOf(n);
-  const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service') };
+  const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service'), orders: ci('# order'), disc: ci('$ discounts') };
   if (c.order < 0 || c.sales < 0 || c.service < 0) throw new Error('Couldn\'t find the Order, $ Sales and Service columns.');
   // customers from the Flat tab
   const fr = XLSX.utils.decode_range(fl['!ref']), fh = [];
@@ -601,11 +601,14 @@ async function loadServiceOrders(wb, file, from, to, say) {
     who[id] = { no: String(val(fl, r, f.order) ?? (String(cell(fl, r, f.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''), store: val(fl, r, f.store), name: String(val(fl, r, f.name) ?? '').trim(), mobile: String(val(fl, r, f.phone) ?? '').replace(/\s/g, '') || null,
       email: String(val(fl, r, f.email) ?? '').trim() || null, date: parseDate(val(fl, r, f.date)), time: parseTime(val(fl, r, f.time)), status: val(fl, r, f.status) };
   }
-  const rows = [], unknown = new Set(); let store = null, svc = null, missing = 0;
+  const rows = [], totals = [], unknown = new Set(); let store = null, svc = null, missing = 0;
   for (let r = 4; r <= range.e.r; r++) {
     const a = val(ws, r, 0), b = val(ws, r, 1);
     if (a) { store = /^total$/i.test(String(a).trim()) ? 'ignore' : storeFor(a); if (!store) unknown.add(a); continue; }
-    if (b) { svc = String(b).trim(); continue; }
+    if (b) { svc = String(b).trim();
+      if (store && store !== 'ignore') totals.push({ store: store.name, service: svc, sales_gross: Math.round(toNum(val(ws, r, c.sales)) * 100) / 100,
+        discounts: c.disc >= 0 ? Math.round(toNum(val(ws, r, c.disc)) * 100) / 100 : 0, orders: c.orders >= 0 ? Math.round(toNum(val(ws, r, c.orders))) : 0, pieces: Math.round(toNum(val(ws, r, c.pieces))) });
+      continue; }
     const id = receiptOf(cell(ws, r, c.order)); if (!id || !store || store === 'ignore' || !svc) continue;
     const w = who[id]; if (!w) { missing++; continue; }
     const name = w.name, [last, firstN] = name.includes(',') ? name.split(',').map(x => x.trim()) : [name, ''];
@@ -618,11 +621,25 @@ async function loadServiceOrders(wb, file, from, to, say) {
   if (missing > rows.length * 0.02) throw new Error(`${missing} order lines aren't on the Flat tab. Export both tabs from the same run and try again.`);
   const stores = [...new Set(rows.map(r => r.store))], orders = new Set(rows.map(r => r.receipt)).size;
   say(`Sales by service and order ${fmtD(from)} – ${fmtD(to)}, ${num(orders)} orders, ${num(rows.length)} service lines. Loading…`);
-  const n = await pushUpload('services', file.name, null, from, to, stores, rows, 'ingest_order_lines', say);
-  return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated. <span class="up">Done.</span>`;
+  // the same file stands in for plain Sales Incoming when it is a Monday-Sunday week or a calendar month
+  const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1, fromD = new Date(from + 'T00:00:00');
+  const grain = days === 7 && fromD.getDay() === 1 ? 'week' : (fromD.getDate() === 1 && addDays(to, 1).endsWith('-01') && days >= 28 ? 'month' : null);
+  let tot = null;
+  const n = await pushUpload('services', file.name, grain, from, to, stores, rows, 'ingest_order_lines', say, async uid => {
+    if (!grain) return;
+    const { data, error } = await sb.rpc('ingest_service_totals', { p_upload: uid, p_rows: totals }); if (error) throw error; tot = data; });
+  let msg = '';
+  if (!grain) msg = ` <span class="dn">Sales totals not loaded: this file runs ${fmtD(from)} to ${fmtD(to)}. For sales, export Monday to Sunday or a whole calendar month.</span>`;
+  else if (tot) {
+    if (tot.stores_written?.length) msg += ` Sales totals loaded for ${tot.stores_written.length} store(s).`;
+    const off = (tot.checked || []).filter(x => Math.abs(x.diff) > 1);
+    if (tot.checked?.length) msg += off.length ? ` <span class="dn">Sales differ from the Sales Incoming already loaded: ${off.map(x => `${esc(x.store)} ${money(x.diff)}`).join(', ')}. Sales Incoming figures kept.</span>`
+      : ` Sales match the Sales Incoming already loaded for ${tot.checked.length} store(s).`;
+  }
+  return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated.${msg} <span class="up">Done.</span>`;
 }
 
-async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say) {
+async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say, beforeFinish) {
   const { data: uid, error } = await sb.rpc('upload_begin', { p_org: S.org.id, p_kind: kind, p_file: fileName, p_grain: grain, p_from: from, p_to: to, p_stores: stores });
   if (error) throw error;
   let n = 0;
@@ -631,6 +648,7 @@ async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say
     if (e) throw e;
     n += data.inserted ?? data.upserted ?? 0; say(`loading… ${num(Math.min(i + 3000, rows.length))} of ${num(rows.length)}`);
   }
+  if (beforeFinish) await beforeFinish(uid);
   const { error: e2 } = await sb.rpc('upload_finish', { p_upload: uid }); if (e2) throw e2;
   return n;
 }

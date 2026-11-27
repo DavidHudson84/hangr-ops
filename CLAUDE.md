@@ -116,3 +116,6 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
   offered that group within the repeat window (`skipped_repeat`) and stamps `sms_sends.service_group`. `campaign_create` stamps it too.
 - Screens: customer page "Services used"; Marketing > One-off campaigns has the service filters, the "promotes" tag and a Service mix
   table (`service_mix` RPC, retail stores only); Admin > Services has the marketing group column; Sending has the repeat days.
+
+
+**Two weekly reports, not three (28 Nov 2026, migration 0008).** A Sales Incoming by service and order upload covering Monday to Sunday or a whole calendar month also fills `sales` (per-service totals, via `ingest_service_totals`), so plain Sales Incoming is retired. It never overwrites a period plain Sales Incoming already loaded; there it compares and the Upload screen shows any difference. The report has no discounts column, so `sales.discounts` is 0 for weeks it loads (not shown on any screen). It includes Master Textile Restoration, which plain Sales Incoming left out. A Sun-Sat or other odd period loads profiles only.
