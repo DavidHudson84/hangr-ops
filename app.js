@@ -405,6 +405,19 @@ async function customersView(q) {
   run();
 }
 
+const SVC_GROUPS = { shirts: 'Shirts', dry_cleaning: 'Dry cleaning', household: 'Household (doonas, blankets)', wash_fold: 'Wash & fold', repairs: 'Repairs & alterations', curtains: 'Curtains', formal: 'Wedding & formal', shoes_leather: 'Shoes & leather' };
+async function serviceCard(id) {
+  const [{ data: rows }, { data: org }] = await Promise.all([
+    sb.from('customer_services').select('grp,orders,sales,first_used,last_used').eq('customer_id', id),
+    sb.from('orgs').select('services_from,services_to').eq('id', S.org.id).maybeSingle()]);
+  if (!org?.services_from) return '';
+  const by = Object.fromEntries((rows || []).map(r => [r.grp, r]));
+  return `<div class="card"><h2>Services used <small>orders from ${fmtD(org.services_from)} to ${fmtD(org.services_to)}</small></h2><div class="scroll"><table>
+    <tr><th>Service</th><th>Orders</th><th>Spend</th><th>First</th><th>Last</th></tr>
+    ${Object.entries(SVC_GROUPS).map(([g, n]) => { const r = by[g]; return r ? `<tr><td>${n}</td><td>${num(r.orders)}</td><td>${money(r.sales)}</td><td>${fmtD(r.first_used)}</td><td>${fmtD(r.last_used)}</td></tr>`
+      : `<tr class="mu"><td>${n}</td><td colspan="4">never</td></tr>`; }).join('')}
+  </table></div><p class="note">From the Sales Incoming by service and order uploads. An order with two services counts under both.</p></div>`;
+}
 async function customerView(id) {
   const [{ data: c }, { data: orders }] = await Promise.all([
     sb.from('v_customers').select('*').eq('id', id).maybeSingle(),
@@ -424,6 +437,7 @@ async function customerView(id) {
     <p>${esc(c.mobile || '')} ${c.email ? '· ' + esc(c.email) : ''} ${c.account_type ? '· POS charge type ' + esc(c.account_type) : ''}</p>
     ${isAdmin() ? `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="isCom" ${c.is_commercial ? 'checked' : ''}> Account (commercial) customer: leave out of retail customer counts and marketing</label>` : ''}
   </div>
+  ${await serviceCard(id)}
   ${isAdmin() ? await customerMarketingCard(c) : ''}
   <div class="card"><h2>Orders <small>latest 200</small></h2><div class="scroll"><table><tr><th>Date</th><th>Time</th><th>Status</th><th>Picked up</th><th>Pieces</th><th>Total</th></tr>
     ${(orders || []).map(o => `<tr><td>${fmtD(o.order_date)}</td><td>${o.order_time ? o.order_time.slice(0, 5) : ''}</td><td>${esc(o.status || '')}</td><td>${fmtD(o.picked_up_date)}</td><td>${num(o.pieces)}</td><td>${money(o.sales, 2)}</td></tr>`).join('')}
@@ -445,7 +459,7 @@ async function uploadView() {
     <p>Drop in any number of <b>Sales Incoming</b> or <b>Customer Orders</b> Excel files. Each file is checked, then loaded. Loading the same file twice is safe: it replaces what was there, it never adds twice.</p>
     <div class="drop" id="drop">Drop .xlsx files here, or <label style="display:inline;color:var(--blue);cursor:pointer"><input type="file" id="fi" accept=".xlsx,.xls" multiple hidden>choose files</label></div>
     <div class="log" id="log"></div>
-    <p class="note">Sales Incoming: one day, one week (Monday to Sunday) or one calendar month per file. Customer Orders: any date range; it replaces every order for those stores in that range.</p>
+    <p class="note">Sales Incoming: one day, one week (Monday to Sunday) or one calendar month per file. Customer Orders: any date range; it replaces every order for those stores in that range. Sales Incoming by service and order (the export with the Flat tab): any date range; each order is replaced by its receipt, so overlapping files never double up. It builds each customer's service profile.</p>
   </div>
   <div class="card"><h2>Recent uploads</h2><div class="scroll"><table><tr><th>When</th><th>File</th><th>Type</th><th>Covers</th><th>Rows</th><th>Status</th></tr>
     ${(ups || []).map(u => `<tr><td>${new Date(u.created_at).toLocaleString('en-AU')}</td><td>${esc(u.file_name)}</td><td>${u.kind}${u.grain ? ' · ' + u.grain : ''}</td><td>${u.date_from ? fmtD(u.date_from) + ' – ' + fmtD(u.date_to) : '–'}</td><td>${num(u.rows_in)}</td><td>${u.status}</td></tr>`).join('')}
@@ -505,6 +519,7 @@ async function loadFile(file, say) {
   const from = parseDate(dm[1]), to = parseDate(dm[2]);
   if (!from || !to) throw new Error(`Couldn't read the date range "${dm[0]}".`);
   const head = (grid[3] || []).map(h => String(h ?? '').trim().toLowerCase());
+  if (wb.SheetNames.includes('Flat') && head.includes('service') && head.includes('order')) return loadServiceOrders(wb, file, from, to, say);
   const isOrders = head.includes('start date');
   const unknown = new Set();
   if (!isOrders) {
@@ -558,6 +573,55 @@ async function loadFile(file, say) {
   return `loaded ${num(n)} orders, ${fmtD(from)} – ${fmtD(to)}, ${stores.join(', ')}. <span class="up">Done.</span>`;
 }
 
+// Sales Incoming by service and order: tab 1 = store > service > order lines, tab "Flat" = each order with its customer.
+// The two join on the POS receipt id inside each order's link. One row per receipt x service goes to order_lines.
+function receiptOf(cell) {
+  const f = String(cell?.f || cell?.l?.Target || '');
+  const m = f.match(/receipt\/([0-9a-f-]{36})/i) || f.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1].toLowerCase() : null;
+}
+async function loadServiceOrders(wb, file, from, to, say) {
+  const ws = wb.Sheets[wb.SheetNames[0]], fl = wb.Sheets['Flat'];
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const cell = (sh, r, c) => sh[XLSX.utils.encode_cell({ r, c })];
+  const val = (sh, r, c) => { const v = cell(sh, r, c)?.v; return (typeof v === 'string' && v.trim() === '') ? null : v ?? null; };
+  const hd = []; for (let c = 0; c <= range.e.c; c++) hd.push(String(val(ws, 3, c) ?? '').trim().toLowerCase());
+  const ci = n => hd.indexOf(n);
+  const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service') };
+  if (c.order < 0 || c.sales < 0 || c.service < 0) throw new Error('Couldn\'t find the Order, $ Sales and Service columns.');
+  // customers from the Flat tab
+  const fr = XLSX.utils.decode_range(fl['!ref']), fh = [];
+  for (let k = 0; k <= fr.e.c; k++) fh.push(String(val(fl, 3, k) ?? '').trim().toLowerCase());
+  const fi = n => fh.indexOf(n);
+  const f = { order: fi('order number'), store: fi('store'), name: fi('account'), phone: fi('phone'), email: fi('email'), date: fi('order date'), time: fi('order time'), status: fi('status') };
+  if (f.order < 0 || f.name < 0 || f.date < 0) throw new Error('The Flat tab is missing Order Number, Account or Order Date.');
+  const who = {};
+  for (let r = 4; r <= fr.e.r; r++) {
+    const id = receiptOf(cell(fl, r, f.order)); if (!id || who[id]) continue;
+    who[id] = { no: String(val(fl, r, f.order) ?? (String(cell(fl, r, f.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''), store: val(fl, r, f.store), name: String(val(fl, r, f.name) ?? '').trim(), mobile: String(val(fl, r, f.phone) ?? '').replace(/\s/g, '') || null,
+      email: String(val(fl, r, f.email) ?? '').trim() || null, date: parseDate(val(fl, r, f.date)), time: parseTime(val(fl, r, f.time)), status: val(fl, r, f.status) };
+  }
+  const rows = [], unknown = new Set(); let store = null, svc = null, missing = 0;
+  for (let r = 4; r <= range.e.r; r++) {
+    const a = val(ws, r, 0), b = val(ws, r, 1);
+    if (a) { store = /^total$/i.test(String(a).trim()) ? 'ignore' : storeFor(a); if (!store) unknown.add(a); continue; }
+    if (b) { svc = String(b).trim(); continue; }
+    const id = receiptOf(cell(ws, r, c.order)); if (!id || !store || store === 'ignore' || !svc) continue;
+    const w = who[id]; if (!w) { missing++; continue; }
+    const name = w.name, [last, firstN] = name.includes(',') ? name.split(',').map(x => x.trim()) : [name, ''];
+    rows.push({ store: store.name, receipt: id, order_no: w.no, service: svc, sales: Math.round(toNum(val(ws, r, c.sales)) * 100) / 100, pieces: Math.round(toNum(val(ws, r, c.pieces))),
+      order_date: w.date, order_time: w.time, status: w.status ? String(w.status) : null,
+      cust_key: name ? `${store.name}::${name}`.replace(/ /g, '_').toLowerCase().slice(0, 100) : null, full_name: name || null, first_name: firstN || null, last_name: last || null, mobile: w.mobile, email: w.email });
+  }
+  if (unknown.size) throw new Error(`Unknown store name(s): ${[...unknown].join(', ')}. Add them in Admin › Stores, then upload again.`);
+  if (!rows.length) throw new Error('No order lines found. Is the order number column a link in this export?');
+  if (missing > rows.length * 0.02) throw new Error(`${missing} order lines aren't on the Flat tab. Export both tabs from the same run and try again.`);
+  const stores = [...new Set(rows.map(r => r.store))], orders = new Set(rows.map(r => r.receipt)).size;
+  say(`Sales by service and order ${fmtD(from)} – ${fmtD(to)}, ${num(orders)} orders, ${num(rows.length)} service lines. Loading…`);
+  const n = await pushUpload('services', file.name, null, from, to, stores, rows, 'ingest_order_lines', say);
+  return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated. <span class="up">Done.</span>`;
+}
+
 async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say) {
   const { data: uid, error } = await sb.rpc('upload_begin', { p_org: S.org.id, p_kind: kind, p_file: fileName, p_grain: grain, p_from: from, p_to: to, p_stores: stores });
   if (error) throw error;
@@ -592,9 +656,10 @@ async function adminView() {
   <p class="note">They then open this site, enter that email with a password and press "First time? Create login". Until email sending is set up, David activates each new login.</p><p id="iMsg"></p></div>
 
   <div class="card"><h2>Services <small>which POS services count as retail, commercial or restoration</small></h2><div class="scroll"><table>
-    <tr><th>Service</th><th>Counts as</th></tr>
-    ${svc.map(s => `<tr><td>${esc(s.name)}</td><td><select data-svc="${esc(s.name)}">${['retail', 'commercial', 'restoration', 'other'].map(c => `<option ${c === s.channel ? 'selected' : ''}>${c}</option>`).join('')}</select></td></tr>`).join('')}
-  </table></div><p class="note">"Other" is left out of every total (tickets, re-dos, zero lines). Changes apply straight away.</p></div>
+    <tr><th>Service</th><th>Counts as</th><th>Marketing group</th></tr>
+    ${svc.map(s => `<tr><td>${esc(s.name)}</td><td><select data-svc="${esc(s.name)}">${['retail', 'commercial', 'restoration', 'other'].map(c => `<option ${c === s.channel ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
+      <td><select data-grp="${esc(s.name)}"><option value="">none</option>${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}" ${g === s.offer_group ? 'selected' : ''}>${n}</option>`).join('')}</select></td></tr>`).join('')}
+  </table></div><p class="note">"Other" is left out of every total (tickets, re-dos, zero lines). Marketing group decides which service a customer counts as using for targeted offers (DRAFT, set 28 Nov 2026); profiles rebuild at the next service upload. Changes apply straight away.</p></div>
 
   <div class="card"><h2>Stores</h2><div class="scroll"><table><tr><th>Store</th><th>Type</th><th>Active</th></tr>
     ${S.stores.map(s => `<tr><td>${esc(s.name)}</td><td>${s.channel}</td><td>${s.active ? 'Yes' : 'No'}</td></tr>`).join('')}</table></div>
@@ -607,6 +672,10 @@ async function adminView() {
     $('#iMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Invited.'; if (!error) adminView();
   };
   app.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { if (confirm('Remove this person\'s access?')) { await sb.from('memberships').delete().eq('id', b.dataset.rm); adminView(); } });
+  app.querySelectorAll('[data-grp]').forEach(el => el.onchange = async () => {
+    const { error } = await sb.from('services').update({ offer_group: el.value || null }).eq('org_id', S.org.id).eq('name', el.dataset.grp);
+    if (error) alert(error.message); else S.services.find(s => s.name === el.dataset.grp).offer_group = el.value || null;
+  });
   app.querySelectorAll('[data-svc]').forEach(el => el.onchange = async () => {
     const { error } = await sb.from('services').update({ channel: el.value, confirmed: true }).eq('org_id', S.org.id).eq('name', el.dataset.svc);
     if (error) alert(error.message); else { S.services.find(s => s.name === el.dataset.svc).channel = el.value; S.cache = {}; }

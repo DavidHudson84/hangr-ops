@@ -39,6 +39,8 @@ async function mkOffers(el) {
   <div class="card"><h2>The six offers</h2>
     ${(lib || []).map(o => `<div class="card" style="margin:10px 0" id="ol-${o.slot}">
       <div class="row"><b>Offer ${o.slot}: </b><input data-name value="${esc(o.name)}" style="flex:1;max-width:420px"><span class="note">${esc(o.note || '')}</span></div>
+      <div class="row"><label style="margin:0">Promotes</label><select data-group><option value="">no one service (whole order)</option>${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}" ${g === o.service_group ? 'selected' : ''}>${n}</option>`).join('')}</select>
+        <span class="note">Anyone sent an offer for this service in the last ${S.sms?.service_repeat_days ?? 350} days is skipped.</span></div>
       ${['vip', 'casual', 'lapsed'].map(v => { const b = o.variants?.[v]?.body || ''; return `<label>${VAR_NAMES[v]} <span class="note" data-cnt="${o.slot}-${v}">${b.length + FOOT.length} chars · ${segs(b + FOOT)} SMS</span></label>
         <textarea data-var="${v}" style="min-height:48px">${esc(b)}</textarea>`; }).join('')}
       <div class="row"><button class="btn ghost" data-save="${o.slot}">Save offer ${o.slot}</button><span id="os-${o.slot}" class="note"></span></div>
@@ -60,7 +62,7 @@ async function mkOffers(el) {
   el.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
     const card = $('#ol-' + b.dataset.save), v = {};
     card.querySelectorAll('textarea[data-var]').forEach(t => v[t.dataset.var] = { body: t.value.trim() });
-    const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
+    const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, service_group: card.querySelector('[data-group]').value || null, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
     $('#os-' + b.dataset.save).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
   });
   $('#lowSave').onclick = async () => {
@@ -144,12 +146,23 @@ async function mkCampaigns(el) {
       <div><label>Average ticket under $</label><input id="cAvgMax" type="number" placeholder="any" style="width:90px"></div>
       <div><label>Average ticket $ or more</label><input id="cAvgMin" type="number" placeholder="any" style="width:90px"></div>
       <div><label>At most</label><input id="cLim" type="number" placeholder="no limit" style="width:100px"></div></div>
+    <div class="row" style="margin-top:6px">${[['cUse', 'Has used any of'], ['cNever', 'Has never used'], ['cOnly', 'Uses only']].map(([k, l]) => `<div><label>${l}</label><select id="${k}" multiple size="4" style="min-width:190px">${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}">${n}</option>`).join('')}</select></div>`).join('')}
+      <div><label>Service history to look at (days)</label><input id="cSvcDays" type="number" value="365" style="width:90px">
+        <label>This campaign promotes</label><select id="cTag"><option value="">no one service</option>${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}">${n}</option>`).join('')}</select></div></div>
+    <p class="note">Service boxes: hold Ctrl to pick more than one. Any service filter leaves out customers with no service history in that window. "Promotes" tags every text with that service, and skips anyone offered it in the last ${S.sms?.service_repeat_days ?? 350} days.</p>
+    <div id="cMix"></div>
     <div class="row" style="margin-top:10px"><button class="btn ghost" id="cPrev">Preview</button><button class="btn" id="cMake">Create for approval</button><span id="cMsg" class="note"></span></div>
     <p class="note">Blank boxes mean everyone. Average ticket is the customer's spend per order over the last 12 months (lifetime if they haven't ordered this year). Account customers, opt-outs, do-not-contact and anyone already at 2 marketing texts this month are left out. 10% are held back to measure results.</p></div>
   <div class="card"><h2>Campaigns</h2><div class="scroll"><table><tr><th>Created</th><th>Name</th><th>Message</th><th>Status</th><th></th></tr>
     ${(camps || []).map(c => `<tr><td>${new Date(c.created_at).toLocaleDateString('en-AU')}</td><td>${esc(c.name)}</td><td style="white-space:normal;text-align:left;max-width:380px">${esc(c.body || '')}</td><td>${statusChip(c.status)}</td>
       <td>${c.status === 'draft' ? `<button class="btn" style="padding:2px 8px" data-ok="${c.id}">Approve and send</button> ` : ''}${['draft', 'approved'].includes(c.status) ? `<button class="btn ghost" style="padding:2px 8px" data-x="${c.id}">Cancel</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="mu">None yet</td></tr>'}</table></div></div>`;
-  const filt = () => ({ stores: [...el.querySelectorAll('.cSt:checked')].map(x => x.value), tiers: [...el.querySelectorAll('.cTi:checked')].map(x => x.value), quadrants: [...el.querySelectorAll('.cQu:checked')].map(x => x.value), max_days: +$('#cMax').value || 365, ...($('#cLim').value ? { limit: +$('#cLim').value } : {}), ...($('#cAvgMax').value ? { max_avg_ticket: +$('#cAvgMax').value } : {}), ...($('#cAvgMin').value ? { min_avg_ticket: +$('#cAvgMin').value } : {}) });
+  const filt = () => ({ stores: [...el.querySelectorAll('.cSt:checked')].map(x => x.value), tiers: [...el.querySelectorAll('.cTi:checked')].map(x => x.value), quadrants: [...el.querySelectorAll('.cQu:checked')].map(x => x.value), max_days: +$('#cMax').value || 365, ...($('#cLim').value ? { limit: +$('#cLim').value } : {}), ...($('#cAvgMax').value ? { max_avg_ticket: +$('#cAvgMax').value } : {}), ...($('#cAvgMin').value ? { min_avg_ticket: +$('#cAvgMin').value } : {}), ...svcFilt() });
+  const pick = id => [...$('#' + id).selectedOptions].map(o => o.value);
+  const svcFilt = () => { const o = {}, u = pick('cUse'), nv = pick('cNever'), on = pick('cOnly');
+    if (u.length) o.uses = u; if (nv.length) o.never_uses = nv; if (on.length) o.only_uses = on;
+    if (u.length || nv.length || on.length) o.service_days = +$('#cSvcDays').value || 365;
+    if ($('#cTag').value) o.service_tag = $('#cTag').value; return o; };
+  serviceMixCard($('#cMix'));
   $('#cBody').oninput = () => { const t = $('#cBody').value; $('#cCnt').textContent = `${t.length + FOOT.length} chars · ${segs(t + FOOT)} SMS each`; };
   $('#cPrev').onclick = async () => { const { data, error } = await sb.rpc('campaign_preview', { p_org: S.org.id, p_filters: filt(), p_body: $('#cBody').value }); $('#cMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `${num(data.recipients)} customers · ${data.segments} SMS each · about ${money(data.est_cost, 2)}. Sample: “${esc(data.sample)}”`; };
   $('#cMake').onclick = async () => {
@@ -225,14 +238,15 @@ async function mkSettings(el) {
     <label>Sender shown on the phone</label><input id="sSender" value="${esc(s.sender_id || '')}"> <span class="note">A name like MasterDC can't receive replies, so STOP replies can't come back. Leave blank to send from ${esc(s.from_number || 'the number')} instead, which can.</span>
     <div class="row"><div><label>Send from</label><input id="sStart" value="${esc((s.quiet_start || '09:00').slice(0, 5))}" style="width:80px"></div><div><label>until</label><input id="sEnd" value="${esc((s.quiet_end || '19:00').slice(0, 5))}" style="width:80px"></div>
       <div><label>Marketing texts per customer per month</label><input id="sCap" type="number" value="${s.marketing_cap_per_month ?? 2}" style="width:80px"></div><div><label>Held back to measure (%)</label><input id="sCtl" type="number" value="${s.control_pct ?? 10}" style="width:80px"></div>
-      <div><label>Referral credit each way ($)</label><input id="sRef" type="number" value="${s.referral_credit ?? 75}" style="width:80px"></div></div>
+      <div><label>Referral credit each way ($)</label><input id="sRef" type="number" value="${s.referral_credit ?? 75}" style="width:80px"></div>
+      <div><label>Days before the same service can be offered again</label><input id="sRep" type="number" value="${s.service_repeat_days ?? 350}" style="width:80px"></div></div>
     <p class="note">Never on Sundays. ${money(s.cost_per_sms, 3)} per SMS part.</p>
     <div class="row"><button class="btn" id="sSave">Save</button><span id="sMsg" class="note"></span></div></div>`;
   $('#sMode').value = s.mode || 'off';
   $('#sSave').onclick = async () => {
     const mode = $('#sMode').value;
     if (mode === 'live' && s.mode !== 'live' && !confirm('Turn on live sending? Everything queued and due will start going to customers within 5 minutes (sending hours only).')) return;
-    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
+    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, service_repeat_days: +$('#sRep').value || 350, updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
     $('#sMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.'; if (!error) marketingView('settings');
   };
 }
@@ -262,4 +276,18 @@ function wireCustomerMarketing(c) {
       referrer_credit: +(S.sms?.referral_credit ?? 75), referee_credit: +(S.sms?.referral_credit ?? 75), logged_by: S.user.id });
     $('#rMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : `Logged. Apply ${money(S.sms?.referral_credit ?? 75)} credit to both in the POS.`;
   };
+}
+
+/* ---------- service mix: who uses what (from Sales Incoming by service and order) ---------- */
+async function serviceMixCard(el) {
+  const { data, error } = await sb.rpc('service_mix', { p_org: S.org.id, p_days: 365 });
+  if (error) { el.innerHTML = `<p class="err">${esc(error.message)}</p>`; return; }
+  if (!data?.from) { el.innerHTML = '<p class="note">No service history yet. Upload Sales Incoming by service and order to build it.</p>'; return; }
+  const st = [...new Set(data.rows.map(r => r.store_id))], sn = id => (S.stores.find(s => s.id === id)?.name || '').replace(/^Master Dry Cleaners\s*-\s*/i, '');
+  const cell = (g, id) => { const rs = data.rows.filter(r => r.grp === g && (!id || r.store_id === id)); const u = rs.reduce((a, r) => a + r.used, 0), n = rs.reduce((a, r) => a + r.not_used, 0);
+    return `<td>${num(u)} <span class="mu">/ ${num(n)}</span></td>`; };
+  el.innerHTML = `<div class="card" style="margin:10px 0"><h2>Service mix <small>${num(data.profiles)} retail customers with orders ${fmtD(data.from)} to ${fmtD(data.to)}</small></h2><div class="scroll"><table>
+    <tr><th>Service</th><th>All stores</th>${st.map(id => `<th>${esc(sn(id))}</th>`).join('')}</tr>
+    ${Object.entries(SVC_GROUPS).map(([g, n]) => `<tr><td>${n}</td>${cell(g)}${st.map(id => cell(g, id)).join('')}</tr>`).join('')}
+  </table></div><p class="note">Used / <span class="mu">never used</span>, counting only customers who appear in the service history. It means more as the history grows.</p></div>`;
 }

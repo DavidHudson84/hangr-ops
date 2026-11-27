@@ -98,3 +98,21 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 - Low spenders (sms_settings.low_spender_cutoff, default $30) get sms_settings.low_spender_body in every period instead of
   the rotation (template key offer_low). The Dec 2026 one-off low-spender campaign was cancelled (26 Nov 2026).
 - 26 Nov 2026: David is not yet sure about the marketing; every period stays draft until he says otherwise.
+
+## Service profiles (28 Nov 2026; migration 0007)
+- Upload: My Clean POS "Sales Incoming" run by service and order. Two tabs: tab 1 store > service > one row per order (order number is a
+  HYPERLINK to `.../order/receipt/<uuid>`), tab "Flat" one row per order/sub-order with Account (POS name), Phone, Email, Order Date.
+  Detected by the Flat tab (before the Customer Orders check, because tab 1 also has a Start Date column). Joined on the receipt uuid.
+  `ingest_order_lines` -> `order_lines` (receipt x service; re-loading replaces each receipt, so any date range and overlaps are safe).
+  Customer match: cust_key (store name::POS name, same as Customer Orders), else same mobile at that store, else a new customer.
+  AIOS `scripts/hangr_ops/service_orders.py` does the same from the command line (loader key).
+- `services.offer_group` (DRAFT mapping, editable in Admin > Services): shirts, dry_cleaning, household, wash_fold, repairs, curtains,
+  formal, shoes_leather; null = not a marketing service (commercial, restoration, re-dos). `app.refresh_service_stats` rebuilds
+  `customer_services` (customer x group: orders, spend, first/last used) at every services upload. `orgs.services_from/to` = periods covered.
+- Targeting: `app.audience` filters `uses`, `never_uses`, `only_uses` (arrays of groups) over `service_days` (default 365); any of
+  them limits the audience to customers with service history in that window. `service_tag` = the group a campaign promotes; skips
+  anyone with an `sms_sends.service_group` = tag within `sms_settings.service_repeat_days` (350, so last year's same offer can go again).
+- `offer_library.service_group` tags the six offers (2 household, 3 repairs, 4 curtains, 6 formal); `offer_approve` skips customers
+  offered that group within the repeat window (`skipped_repeat`) and stamps `sms_sends.service_group`. `campaign_create` stamps it too.
+- Screens: customer page "Services used"; Marketing > One-off campaigns has the service filters, the "promotes" tag and a Service mix
+  table (`service_mix` RPC, retail stores only); Admin > Services has the marketing group column; Sending has the repeat days.
