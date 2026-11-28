@@ -1,5 +1,5 @@
 // sms-send: sends queued SMS through Twilio. Triggered every 5 minutes by pg_cron (hangr-sms-send).
-// Rules: nothing leaves unless sms_settings.mode is 'test' (only to test_mobile) or 'live';
+// Rules: nothing leaves unless sms_settings.mode is 'test' (only to test_mobile, plus admin test texts) or 'live';
 // only inside quiet hours (Melbourne time), never on days_off; suppression and do-not-contact
 // are re-checked at the moment of sending. Control-group rows are never queued, so never sent.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
@@ -38,10 +38,11 @@ Deno.serve(async (req) => {
       out.push({ org: s.org_id, skipped: "outside sending hours" }); continue;
     }
     if (!SID || !TOKEN) { out.push({ org: s.org_id, skipped: "Twilio keys not set" }); continue; }
-    let q = sb.from("sms_sends").select("id,mobile,body,customer_id,is_marketing").eq("org_id", s.org_id).eq("status", "queued")
+    let q = sb.from("sms_sends").select("id,mobile,body,customer_id,is_marketing,category").eq("org_id", s.org_id).eq("status", "queued")
       .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`).order("scheduled_for", { ascending: true, nullsFirst: true }).limit(150);
-    if (s.mode === "test") q = q.eq("mobile", s.test_mobile ?? "none");
-    const { data: rows } = await q;
+    const { data: all } = await q;
+    // test mode: only the test mobile, and test texts an admin sent from the Test screen
+    const rows = s.mode === "test" ? (all ?? []).filter((r) => r.mobile === s.test_mobile || r.category === "test") : all;
     let sent = 0, failed = 0, suppressed = 0;
     for (const m of rows ?? []) {
       // claim the row so two runs can't double send

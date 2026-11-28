@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['programs', 'Yearly & reminders'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['test', 'Test texts'], ['programs', 'Yearly & reminders'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -19,7 +19,7 @@ async function marketingView(tab = 'offers') {
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
   <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
-  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, programs: mkPrograms, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
+  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, test: mkTest, programs: mkPrograms, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));
 }
 
@@ -133,10 +133,12 @@ async function mkLoyalty(el) {
 
 /* ---------- one-off campaigns ---------- */
 async function mkCampaigns(el) {
-  const { data: camps } = await sb.from('campaigns').select('*').eq('org_id', S.org.id).eq('kind', 'custom').order('created_at', { ascending: false }).limit(20);
+  const { data: camps } = await sb.from('campaigns').select('*').eq('org_id', S.org.id).in('kind', ['custom', 'announcement']).order('created_at', { ascending: false }).limit(20);
   const retail = S.stores.filter(s => s.channel === 'retail' && s.active);
   el.innerHTML = `<div class="card"><h2>Build a one-off campaign</h2>
-    <label>Name</label><input id="cName" style="width:100%" placeholder="e.g. Albert Park VIP thank you">
+    <div class="row"><label style="margin:0;color:var(--ink)"><input type="radio" name="cType" value="offer" checked> <b>Marketing</b>: an offer or promotion (10% held back to measure, counts towards the 2-a-month limit)</label></div>
+    <div class="row"><label style="margin:0;color:var(--ink)"><input type="radio" name="cType" value="announcement"> <b>Customer announcement</b>: news for customers, e.g. Christmas hours, a price change, a new service (goes to everyone selected, nobody held back, doesn't count as marketing; opt-outs are still never texted)</label></div>
+    <label>Name</label><input id="cName" style="width:100%" placeholder="e.g. Christmas opening hours">
     <label>Message <span class="note" id="cCnt"></span></label><textarea id="cBody" placeholder="Hi {first_name}, …  {store} is the customer's store. The opt-out line is added automatically."></textarea>
     <div class="row" style="margin-top:6px">
       <div><label>Stores</label>${retail.map(s => `<label style="display:inline-block;margin-right:8px;color:var(--ink)"><input type="checkbox" class="cSt" value="${s.id}"> ${esc(s.name)}</label>`).join('')}</div></div>
@@ -154,9 +156,10 @@ async function mkCampaigns(el) {
     <div class="row" style="margin-top:10px"><button class="btn ghost" id="cPrev">Preview</button><button class="btn" id="cMake">Create for approval</button><span id="cMsg" class="note"></span></div>
     <p class="note">Blank boxes mean everyone. Average ticket is the customer's spend per order over the last 12 months (lifetime if they haven't ordered this year). Account customers, opt-outs, do-not-contact and anyone already at 2 marketing texts this month are left out. 10% are held back to measure results.</p></div>
   <div class="card"><h2>Campaigns</h2><div class="scroll"><table><tr><th>Created</th><th>Name</th><th>Message</th><th>Status</th><th></th></tr>
-    ${(camps || []).map(c => `<tr><td>${new Date(c.created_at).toLocaleDateString('en-AU')}</td><td>${esc(c.name)}${c.starts_on ? `<div class="mu" style="font-size:12px">goes out ${fmtD(c.starts_on)}${c.program_id ? ' · yearly' : ''}</div>` : ''}</td><td style="white-space:normal;text-align:left;max-width:380px">${esc(c.body || '')}</td><td>${statusChip(c.status)}</td>
+    ${(camps || []).map(c => `<tr><td>${new Date(c.created_at).toLocaleDateString('en-AU')}</td><td>${esc(c.name)}${c.kind === 'announcement' ? ' <span class="chip">announcement</span>' : ''}${c.starts_on ? `<div class="mu" style="font-size:12px">goes out ${fmtD(c.starts_on)}${c.program_id ? ' · yearly' : ''}</div>` : ''}</td><td style="white-space:normal;text-align:left;max-width:380px">${esc(c.body || '')}</td><td>${statusChip(c.status)}</td>
       <td>${c.status === 'draft' ? `<button class="btn" style="padding:2px 8px" data-ok="${c.id}">Approve and send</button> ` : ''}${['draft', 'approved'].includes(c.status) ? `<button class="btn ghost" style="padding:2px 8px" data-x="${c.id}">Cancel</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="mu">None yet</td></tr>'}</table></div></div>`;
-  const filt = () => ({ stores: [...el.querySelectorAll('.cSt:checked')].map(x => x.value), tiers: [...el.querySelectorAll('.cTi:checked')].map(x => x.value), quadrants: [...el.querySelectorAll('.cQu:checked')].map(x => x.value), max_days: +$('#cMax').value || 365, ...($('#cLim').value ? { limit: +$('#cLim').value } : {}), ...($('#cAvgMax').value ? { max_avg_ticket: +$('#cAvgMax').value } : {}), ...($('#cAvgMin').value ? { min_avg_ticket: +$('#cAvgMin').value } : {}), ...svcFilt() });
+  const isAnn = () => el.querySelector('input[name="cType"]:checked').value === 'announcement';
+  const filt = () => ({ ...(isAnn() ? { announcement: true } : {}), stores: [...el.querySelectorAll('.cSt:checked')].map(x => x.value), tiers: [...el.querySelectorAll('.cTi:checked')].map(x => x.value), quadrants: [...el.querySelectorAll('.cQu:checked')].map(x => x.value), max_days: +$('#cMax').value || 365, ...($('#cLim').value ? { limit: +$('#cLim').value } : {}), ...($('#cAvgMax').value ? { max_avg_ticket: +$('#cAvgMax').value } : {}), ...($('#cAvgMin').value ? { min_avg_ticket: +$('#cAvgMin').value } : {}), ...svcFilt() });
   const pick = id => [...$('#' + id).selectedOptions].map(o => o.value);
   const svcFilt = () => { const o = {}, u = pick('cUse'), nv = pick('cNever'), on = pick('cOnly');
     if (u.length) o.uses = u; if (nv.length) o.never_uses = nv; if (on.length) o.only_uses = on;
@@ -462,4 +465,33 @@ async function mkPrograms(el, openId) {
   el.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => edit(progs.find(p => p.id === b.dataset.ed)));
   $('#pAddY').onclick = () => edit({ kind: 'yearly', filters: { max_days: 730 } });
   $('#pAddR').onclick = () => edit({ kind: 'reminder', filters: {} });
+}
+
+/* ---------- test texts: send any wording to any mobile, exactly as a customer would get it ---------- */
+async function mkTest(el) {
+  const { data: cat } = await sb.rpc('message_catalogue', { p_org: S.org.id });
+  const groups = [...new Set((cat || []).map(x => x.grp))];
+  const retail = S.stores.filter(s => s.channel === 'retail' && s.active);
+  const { data: recent } = await sb.from('sms_sends').select('created_at,sent_at,mobile,status,error,body').eq('org_id', S.org.id).eq('category', 'test').order('created_at', { ascending: false }).limit(10);
+  el.innerHTML = `<div class="card"><h2>Send a test text <small>see exactly what a customer would get</small></h2>
+    <label>Start from a message (or just type below)</label>
+    <select id="tPick" style="width:100%"><option value="">Choose a message…</option>${groups.map(g => `<optgroup label="${esc(g)}">${(cat || []).filter(x => x.grp === g).map((x, i) => `<option value="${esc(x.body)}">${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select>
+    <label>Message</label><textarea id="tBody" rows="4" style="width:100%" placeholder="Hi {first_name}, …"></textarea>
+    <div class="row"><div><label>Pretend the customer is called</label><input id="tName" value="Jen" style="width:120px"></div>
+      <div><label>at store</label><select id="tStore">${retail.map(s => `<option>${esc(s.name)}</option>`).join('')}</select></div>
+      <div><label>Send to mobile</label><input id="tMob" value="${esc(S.sms?.test_mobile || '')}" placeholder="04xx xxx xxx" style="width:150px"></div>
+      <div style="align-self:flex-end"><button class="btn" id="tGo">Send test</button></div></div>
+    <p class="note" id="tLen"></p><p id="tMsg"></p>
+    <p class="note">{first_name}, {store}, {ends} (30 days from today), {code}, {review_url}, {ready_date} and {month} are filled in with sample values, and the opt-out line is added, so the length shown is the real one. Test texts go out within 5 minutes, between ${(S.sms?.quiet_start || '09:00').slice(0, 5)} and ${(S.sms?.quiet_end || '19:00').slice(0, 5)}, not on Sundays, even while Sending is in test mode. Up to 20 an hour.</p></div>
+  <div class="card"><h2>Recent test texts</h2><div class="scroll"><table><tr><th>Sent</th><th>To</th><th>Status</th><th>Text</th></tr>
+    ${(recent || []).map(r => `<tr><td>${new Date(r.sent_at || r.created_at).toLocaleString('en-AU')}</td><td>${esc(r.mobile)}</td><td>${statusChip(r.status)}${r.error ? ` <span class="mu">${esc(r.error)}</span>` : ''}</td><td style="white-space:normal;max-width:480px">${esc(r.body)}</td></tr>`).join('') || '<tr><td colspan="4" class="mu">None yet</td></tr>'}</table></div></div>`;
+  const len = () => { const t = $('#tBody').value, n = t.length + FOOT.length; $('#tLen').textContent = t ? `About ${n} characters with the opt-out line (before names fill in): ${segs(t + FOOT)} text${segs(t + FOOT) > 1 ? 's' : ''} each.` : ''; };
+  $('#tPick').onchange = () => { if ($('#tPick').value) { $('#tBody').value = $('#tPick').value; len(); } };
+  $('#tBody').oninput = len;
+  $('#tGo').onclick = async () => {
+    $('#tMsg').textContent = 'Sending…';
+    const { data, error } = await sb.rpc('send_test_sms', { p_org: S.org.id, p_mobile: $('#tMob').value, p_body: $('#tBody').value, p_first_name: $('#tName').value.trim() || 'Jen', p_store: $('#tStore').value });
+    if (error) { $('#tMsg').innerHTML = `<span class="err">${esc(error.message)}</span>`; return; }
+    $('#tMsg').innerHTML = `<span class="up">Queued to ${esc(data.to)}${data.in_hours ? ', arriving within 5 minutes' : ', and it goes at the start of the next sending window'}.</span> ${data.length} characters, ${data.texts} text${data.texts > 1 ? 's' : ''}:<div class="card" style="margin-top:6px;white-space:pre-wrap">${esc(data.body)}</div>`;
+  };
 }
