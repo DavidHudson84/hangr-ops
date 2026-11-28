@@ -196,3 +196,5 @@ one of the customer's receipts (via order_lines) in the window. Marketing > Queu
 (20+ held back), return per $1 of SMS, Discounts used (`discount_report`). Customer page: Marketing history.
 Deploy rule learnt the hard way: run `node --check` on all six scripts concatenated, and only push if it passes
 (`set -e`), never chain a push after a heredoc.
+
+**Discount checks (28 Nov 2026, migration 0020):** `order_lines` now keeps the discount, staff member and pickup staff at drop-off (service upload + Python loader). `discount_types` carries rules (max_pct, max_amount, expected_pct, min_order before discount, min_gap_days), seeded: $10 off for SMS = $10 max, order $30+, no order in 60 days; VIP shirts = 30%; FreeFlow = 20% / $40. `v_discount_checks` flags full (100% off), over_pct, over_amount, wrong_pct, under_min, recent_customer, customer_unknown, added_later (discount at payment > discount at drop-off; only visible when collected in a later week). Marketing > Discount checks (`discount_checks`): tiles, by staff member vs store average, flagged orders. Payment type is not in any report, so cash pocketing can only be inferred.
