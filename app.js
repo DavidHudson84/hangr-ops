@@ -1000,10 +1000,10 @@ async function reportsCard(el) {
   const [{ data: sch }, { data: runs }] = await Promise.all([
     sb.from('report_schedules').select('*').eq('org_id', S.org.id),
     sb.from('report_runs').select('*').eq('org_id', S.org.id).order('created_at', { ascending: false }).limit(60)]);
-  const name = id => S.stores.find(s => s.id === id)?.name || '?', sort = id => S.stores.find(s => s.id === id)?.sort ?? 99;
-  const last = id => (runs || []).find(r => r.store_id === id && r.kind !== 'waiting');
+  const name = id => id ? (S.stores.find(s => s.id === id)?.name || '?') : 'Marketing results', sort = id => id ? (S.stores.find(s => s.id === id)?.sort ?? 99) : 999;
+  const last = id => (runs || []).find(r => (r.store_id || null) === (id || null) && r.kind !== 'waiting');
   const rows = (sch || []).sort((a, b) => sort(a.store_id) - sort(b.store_id));
-  el.innerHTML = `<h2>Monday store reports <small>one email per store for the week just finished</small></h2>
+  el.innerHTML = `<h2>Monday reports <small>one email per store, plus marketing results, for the week just finished</small></h2>
     <p class="note">Each report goes once the week's two uploads (Sales Incoming by service and order, then Customer Orders) are loaded and locked, at or after the time set here. If they're late it still sends when they land, up to two days after. If anything is still waiting at 12pm Tuesday, David gets one note. Sent from reports@hangr.au; replies come to David. Separate addresses with commas.</p>
     <div class="scroll"><table><tr><th>Store</th><th>Send to</th><th>Day</th><th>From</th><th>Counter wages</th><th>On</th><th>Last sent</th><th></th></tr>
     ${rows.map(r => { const l = last(r.store_id); return `<tr data-sch="${r.id}">
@@ -1011,7 +1011,7 @@ async function reportsCard(el) {
       <td><input data-f="to" value="${esc((r.recipients || []).join(', '))}" style="width:280px"></td>
       <td><select data-f="dow">${REPORT_DOW.map((d, i) => `<option value="${i}" ${i === r.send_dow ? 'selected' : ''}>${d}</option>`).join('')}</select></td>
       <td><input data-f="at" type="time" value="${String(r.send_after).slice(0, 5)}" style="width:100px"></td>
-      <td><input data-f="lab" type="checkbox" ${r.include_labour ? 'checked' : ''}></td>
+      <td>${r.kind === 'marketing' ? '<span class="mu">–</span>' : `<input data-f="lab" type="checkbox" ${r.include_labour ? 'checked' : ''}>`}</td>
       <td><input data-f="on" type="checkbox" ${r.enabled ? 'checked' : ''}></td>
       <td class="mu">${l ? `${l.kind === 'test' ? 'test · ' : ''}${l.status === 'sent' ? '' : '<span class="dn">failed</span> · '}${new Date(l.created_at).toLocaleString('en-AU', { dateStyle: 'short', timeStyle: 'short' })}${l.error ? ` <span class="dn">${esc(l.error)}</span>` : ''}` : '–'}</td>
       <td style="white-space:nowrap"><button class="btn" data-save>Save</button> <button class="btn ghost" data-prev>Preview</button> <button class="btn ghost" data-test>Send me a test</button></td></tr>`; }).join('')}
@@ -1024,12 +1024,12 @@ async function reportsCard(el) {
       const bad = to.filter(x => !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(x));
       if (bad.length) return msg(`<span class="dn">Not an email address: ${esc(bad.join(', '))}</span>`);
       if (f('on').checked && !to.length) return msg('<span class="dn">Add at least one address before switching it on.</span>');
-      const { error } = await sb.from('report_schedules').update({ recipients: to, send_dow: +f('dow').value, send_after: f('at').value || '09:00', include_labour: f('lab').checked, enabled: f('on').checked, updated_at: new Date().toISOString() }).eq('id', id);
+      const { error } = await sb.from('report_schedules').update({ recipients: to, send_dow: +f('dow').value, send_after: f('at').value || '16:00', include_labour: f('lab') ? f('lab').checked : false, enabled: f('on').checked, updated_at: new Date().toISOString() }).eq('id', id);
       msg(error ? `<span class="dn">${esc(error.message)}</span>` : `<span class="up">Saved ${esc(name(row.store_id))}.</span>`);
     };
     tr.querySelector('[data-prev]').onclick = async () => {
       msg('Building preview…');
-      const { data, error } = await sb.functions.invoke('store-reports', { body: { mode: 'preview', store_id: row.store_id, labour: f('lab').checked } });
+      const { data, error } = await sb.functions.invoke('store-reports', { body: { mode: 'preview', kind: row.kind, org_id: S.org.id, store_id: row.store_id, labour: f('lab') ? f('lab').checked : false } });
       if (error || data?.error) return msg(`<span class="dn">${esc(data?.error || error.message)}</span>`);
       msg(`<b>Subject:</b> ${esc(data.subject)}`);
       el.querySelector('#repPrev').innerHTML = '<iframe style="width:100%;height:900px;border:1px solid var(--line);border-radius:8px;margin-top:8px"></iframe>';
@@ -1037,7 +1037,7 @@ async function reportsCard(el) {
     };
     tr.querySelector('[data-test]').onclick = async () => {
       msg('Sending a test to you…');
-      const { data, error } = await sb.functions.invoke('store-reports', { body: { mode: 'test', store_id: row.store_id, labour: f('lab').checked } });
+      const { data, error } = await sb.functions.invoke('store-reports', { body: { mode: 'test', kind: row.kind, org_id: S.org.id, store_id: row.store_id, labour: f('lab') ? f('lab').checked : false } });
       msg(error || data?.error ? `<span class="dn">${esc(data?.error || error.message)}</span>` : `<span class="up">Test sent to ${esc(data.to.join(', '))}.</span>`);
     };
   });

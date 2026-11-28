@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -19,7 +19,7 @@ async function marketingView(tab = 'offers') {
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
   <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
-  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
+  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));
 }
 
@@ -373,4 +373,20 @@ async function mkChecks(el, weeks = 4) {
     const { error } = await q; if (error) alert(error.message); };
   el.querySelectorAll('[data-rv]').forEach(x => x.onchange = () => saveRv(+x.dataset.rv));
   el.querySelectorAll('[data-rn]').forEach(x => x.onchange = () => { const sel = el.querySelector(`[data-rv="${x.dataset.rn}"]`); if (!sel.value) sel.value = 'checking'; saveRv(+x.dataset.rn); });
+}
+
+/* ---------- the weekly marketing results report (same as the Monday email) ---------- */
+async function mkReport(el, week) {
+  const weeks = []; { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 7) % 7 || 7)); for (let i = 0; i < 26; i++) { weeks.push(iso(d)); d.setDate(d.getDate() - 7); } }
+  week = week || weeks[0];
+  el.innerHTML = `<div class="card"><h2>Marketing results <small>week ending <select id="mrW">${weeks.map(w => `<option value="${w}" ${w === week ? 'selected' : ''}>${fmtD(w)}</option>`).join('')}</select></small></h2>
+    <p class="note">The same report goes out by email on Mondays when it's switched on in Admin › Monday reports. <button class="btn ghost" id="mrT">Email it to me</button> <span id="mrM"></span></p>
+    <iframe id="mrF" style="width:100%;height:1500px;border:1px solid var(--line);border-radius:8px"></iframe></div>`;
+  $('#mrW').onchange = () => mkReport(el, $('#mrW').value);
+  const { data, error } = await sb.functions.invoke('store-reports', { body: { mode: 'preview', kind: 'marketing', org_id: S.org.id, week } });
+  if (error || data?.error) { $('#mrM').innerHTML = `<span class="err">${esc(data?.error || error.message)}</span>`; return; }
+  $('#mrF').srcdoc = data.html;
+  $('#mrT').onclick = async () => { $('#mrM').textContent = 'Sending…';
+    const { data: t, error: e } = await sb.functions.invoke('store-reports', { body: { mode: 'test', kind: 'marketing', org_id: S.org.id, week } });
+    $('#mrM').innerHTML = e || t?.error ? `<span class="err">${esc(t?.error || e.message)}</span>` : `<span class="up">Sent to ${esc(t.to.join(', '))}.</span>`; };
 }

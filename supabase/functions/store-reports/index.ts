@@ -2,12 +2,12 @@
 // Sales Incoming by service and order and Customer Orders are both loaded and locked.
 //   {mode:'cron', secret}            pg_cron every 15 min: sends what reports_due() says is due
 //   {mode:'render', secret, store_id, week}  scheduler secret only: returns the HTML, sends nothing
-//   {mode:'preview', store_id, week} admin login: returns the email HTML
+//   {mode:'preview', store_id | kind:'marketing' + org_id, week} admin login: returns the email HTML
 //   {mode:'test', store_id, week}    admin login: sends it to the logged-in admin only
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const URL_ = Deno.env.get('SUPABASE_URL')!, SRK = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const APP = 'https://davidhudson84.github.io/hangr-ops/';
+const APP = 'https://ops.hangr.au/';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } });
 
@@ -110,6 +110,83 @@ function build(r: R, opts: { labour: boolean }) {
   return { html, subject };
 }
 
+// ---------- marketing results: what was sent, what followed, and what the texts actually caused ----------
+function buildMarketing(r: R) {
+  const T4 = r.totals?.['4w'] || {}, T13 = r.totals?.['13w'] || {};
+  const rate = (a: number, b: number) => b ? a / b : null;
+  const pc = (x: number | null) => x == null ? '–' : (x * 100).toFixed(1) + '%';
+  const extra = (x: R) => x.held >= 20 && x.sent ? (x.sales / x.sent - x.held_sales / x.held) * x.sent : null;
+  const roi = (x: R) => { const e = extra(x); return e != null && x.cost > 0 ? e / x.cost : null; };
+  const h2 = (t: string, sub = '') => `<div style="font-size:17px;font-weight:700;color:${INK};margin:26px 0 2px">${t}</div>${sub ? `<div style="color:${MUTE};font-size:13px;margin-bottom:8px">${sub}</div>` : ''}`;
+  const th = (t: string, right = true) => `<th style="text-align:${right ? 'right' : 'left'};padding:7px 8px;border-bottom:2px solid ${LINE};color:${MUTE};font-weight:600;font-size:12px;white-space:nowrap">${t}</th>`;
+  const table = (head: string, body: string) => `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:13px;color:${INK}"><tr>${head}</tr>${body}</table>`;
+  const tile = (label: string, big: string, sub: string) => `<td valign="top" style="width:50%;padding:6px"><div style="border:1px solid ${LINE};border-radius:10px;padding:14px">
+    <div style="color:${MUTE};font-size:13px">${label}</div><div style="font-size:24px;font-weight:700;color:${INK};margin:4px 0">${big}</div><div style="font-size:13px;color:${MUTE}">${sub}</div></div></td>`;
+  const e4 = extra(T4), r4 = roi(T4), live = r.sending?.mode === 'live';
+  const lift = (a: number | null, b: number | null) => a == null || b == null ? '' : ` <span style="color:${col(a - b)}">(${a - b >= 0 ? '+' : '−'}${Math.abs((a - b) * 100).toFixed(1)} pts)</span>`;
+  const tiles = [
+    tile('Texts sent, last 4 weeks', String(T4.sent ?? 0), `${money(T4.cost ?? 0)} in SMS · ${T4.held ?? 0} held back to compare`),
+    tile('Ordered after a text', pc(rate(T4.ordered ?? 0, T4.sent ?? 0)), `held back: ${pc(rate(T4.held_ordered ?? 0, T4.held ?? 0))}`),
+    tile('Extra sales the texts caused', e4 == null ? '–' : money(e4, 0), e4 == null ? 'needs 20+ customers held back' : `above what the held-back customers spent${r4 != null ? ` · ${money(r4)} back per $1 of SMS` : ''}`),
+    tile('Offer discounts redeemed', String(T4.redeemed ?? 0), `${money(T4.discount ?? 0)} given away`),
+  ];
+  const msgs = (r.messages as R[]) || [];
+  const best = msgs.filter(m => extra(m) != null).sort((a, b) => (roi(b) ?? -1e9) - (roi(a) ?? -1e9))[0];
+  const lapse = (r.lapse as R[]) || [];
+  const topLapse = lapse.filter(l => l.sent >= 20).sort((a, b) => (rate(b.ordered, b.sent) ?? 0) - (rate(a.ordered, a.sent) ?? 0))[0];
+  const points: [string, string][] = [];
+  if (!T13.sent) points.push(['Texts', live ? 'No marketing texts in the last 13 weeks.' : 'Texts aren’t going out yet: sending is switched off or in test mode in Marketing › Sending. This report fills in once offers go out.']);
+  else {
+    points.push(['Last 4 weeks', `${T4.sent ?? 0} texts to ${T4.customers ?? 0} customers cost ${money(T4.cost ?? 0)}. ${T4.ordered ?? 0} of them ordered within the window (${pc(rate(T4.ordered ?? 0, T4.sent ?? 0))}), against ${pc(rate(T4.held_ordered ?? 0, T4.held ?? 0))} of the customers held back.`]);
+    if (e4 != null) points.push(['What it caused', `${money(e4)} of sales above what would have happened anyway${r4 != null ? `, ${money(r4)} back for every $1 of SMS` : ''}. Discounts given on top: ${money(T4.discount ?? 0)}.`]);
+    if (best) points.push(['Best message', `${esc(best.message)}: ${money(extra(best) ?? 0)} extra from ${best.sent} texts${roi(best) != null ? ` (${money(roi(best))} per $1)` : ''}.`]);
+    if (topLapse) points.push(['Who responds', `${esc(topLapse.bucket)}: ${pc(rate(topLapse.ordered, topLapse.sent))} ordered after a text.`]);
+    if (T13.still_counting) points.push(['Still counting', `${T13.still_counting} recent texts are still inside their window, so their results will grow.`]);
+  }
+  const mis = r.misuse || {};
+  if (mis.flagged) points.push(['Discount checks', `${mis.flagged} discounted orders flagged in the last 4 weeks loaded, ${mis.to_check} still to check, ${mis.confirmed} confirmed misuse (${money(mis.confirmed_amount ?? 0)}).`]);
+
+  const msgRow = (m: R) => { const e = extra(m), ro = roi(m), a = rate(m.ordered, m.sent), b = rate(m.held_ordered, m.held);
+    return `<tr>${cell(`${esc(m.message)}<div style="color:${MUTE};font-size:11px">${dShort(m.first_sent)}${m.last_sent !== m.first_sent ? ' – ' + dShort(m.last_sent) : ''}${m.still_counting ? ' · still counting' : ''}</div>`)}
+      ${num(String(m.sent))}${num(pc(a) + lift(a, b))}${num(pc(rate(m.redeemed, m.sent)))}${num(money(m.sent ? m.sales / m.sent : 0))}${num(m.held ? money(m.held_sales / m.held) : '–')}
+      ${num(e == null ? '<span style="color:' + MUTE + '">too few held back</span>' : `<span style="color:${col(e)}">${money(e, 0)}</span>`)}${num(money(m.cost))}${num(money(m.discount))}${num(ro == null ? '–' : `<b>${money(ro)}</b>`)}</tr>`; };
+  const storeRow = (s: R) => { const a = rate(s.ordered, s.sent), b = rate(s.held_ordered, s.held), e = extra(s);
+    return `<tr>${cell(esc(s.store))}${num(String(s.sent))}${num(pc(a) + lift(a, b))}${num(money(s.sales, 0))}${num(String(s.redeemed))}${num(e == null ? '–' : `<span style="color:${col(e)}">${money(e, 0)}</span>`)}${num(money(s.cost))}</tr>`; };
+  const lapseRow = (l: R) => { const a = rate(l.ordered, l.sent), b = rate(l.held_ordered, l.held);
+    return `<tr>${cell(esc(l.bucket))}${num(String(l.sent))}${num(pc(a) + lift(a, b))}${num(money(l.sales, 0))}${num(l.ordered ? money(l.sales / l.ordered) : '–')}</tr>`; };
+  const W = (r.weeks as R[]) || [], maxS = Math.max(1, ...W.map(w => w.sales));
+  const bar = (v: number) => `<table cellpadding="0" cellspacing="0" style="width:${Math.max(1, Math.round(v / maxS * 100))}%"><tr><td style="background:${BLUE};height:7px;line-height:7px;font-size:1px">&nbsp;</td></tr></table>`;
+  const D = (r.discounts as R[]) || [];
+  const empty = (n: number, t: string) => `<tr><td colspan="${n}" style="padding:8px;color:${MUTE}">${t}</td></tr>`;
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#f4f6f8"><div style="max-width:760px;margin:0 auto;background:#fff;padding:24px 20px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:${INK}">
+  <table style="width:100%"><tr><td><div style="letter-spacing:1.5px;font-size:12px;color:${MUTE}">${esc(String(r.org || '').toUpperCase())}</div><div style="font-size:22px;font-weight:700">Marketing results</div></td>
+  <td style="text-align:right;font-size:13px;color:${MUTE}">Week ending<br><b style="color:${INK}">Sunday ${dLong(r.week_end)}</b></td></tr></table>
+  ${live ? '' : `<div style="background:#fff7e6;border:1px solid #f3d19c;border-radius:10px;padding:10px 14px;margin-top:14px;font-size:13px">Sending is <b>${esc(r.sending?.mode || 'off')}</b>, so no offers are going to customers yet. Figures below are only what has already gone out.</div>`}
+  <table style="width:100%;margin:10px -6px 0" cellpadding="0" cellspacing="0"><tr>${tiles[0]}${tiles[1]}</tr><tr>${tiles[2]}${tiles[3]}</tr></table>
+  ${h2('Key points')}
+  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:14px">${points.map(([k, v]) => `<tr><td valign="top" style="padding:9px 10px 9px 0;border-bottom:1px solid ${LINE};font-weight:600;width:150px">${k}</td><td style="padding:9px 0;border-bottom:1px solid ${LINE};color:#33404f">${v}</td></tr>`).join('')}</table>
+  ${h2('By message', 'Texts sent in the last 13 weeks · ordered against the customers held back from the same message')}
+  ${table(th('Message', false) + th('Sent') + th('Ordered (vs held back)') + th('Redeemed') + th('Sales per text') + th('Per held back') + th('Extra sales') + th('SMS cost') + th('Discount') + th('Per $1 of SMS'),
+    msgs.map(msgRow).join('') || empty(10, 'No texts in the last 13 weeks.'))}
+  ${h2('By store', 'Last 13 weeks')}
+  ${table(th('Store', false) + th('Sent') + th('Ordered (vs held back)') + th('Sales') + th('Redeemed') + th('Extra sales') + th('SMS cost'),
+    ((r.stores as R[]) || []).map(storeRow).join('') || empty(7, 'No texts in the last 13 weeks.'))}
+  ${h2('Who responds', 'By how long since the customer’s last order when the text went out')}
+  ${table(th('Customer', false) + th('Sent') + th('Ordered (vs held back)') + th('Sales') + th('Per order'), lapse.map(lapseRow).join('') || empty(5, 'No texts in the last 13 weeks.'))}
+  ${h2('Week by week', 'Texts sent each week and the sales that followed them')}
+  ${table(th('Week ending', false) + th('Sent') + th('SMS cost') + th('Sales that followed') + th('', false) + th('Redeemed'),
+    W.map(w => `<tr>${cell(dShort(w.we))}${num(String(w.sent))}${num(money(w.cost))}${num(money(w.sales, 0))}${cell(bar(w.sales), 'width:30%')}${num(String(w.redeemed))}</tr>`).join(''))}
+  ${h2('Offer and loyalty discounts used', 'Coupons and Discounts report, last 4 weeks loaded · whether the customer had a text in the 30 days before')}
+  ${table(th('POS discount', false) + th('Orders') + th('Customers') + th('$ off') + th('Order value') + th('Texted first'),
+    D.map(x => `<tr>${cell(esc(x.name) + `<div style="color:${MUTE};font-size:11px">${esc(x.purpose)}</div>`)}${num(String(x.orders))}${num(String(x.customers))}${num(money(x.discount))}${num(money(x.sales, 0))}${num(x.customers ? `${x.texted} (${Math.round(x.texted / x.customers * 100)}%)` : '–')}</tr>`).join('') || empty(6, 'No offer or loyalty discounts loaded for these weeks yet.'))}
+  <p style="color:${MUTE};font-size:12px;margin-top:26px;line-height:1.5"><b>How it’s worked out.</b> Each text is credited with the customer’s orders inside its window (14 days for offers, 21 for win-backs, 28 for welcomes, 7 for collection reminders) or until their next text, so no sale counts twice. ${r.sending?.control_pct ?? 10}% of customers are held back from each message and get nothing; they show what would have happened anyway. “Extra sales” is sales per text minus sales per held-back customer, times texts sent, shown once 20+ are held back. “Redeemed” means a discount marked Marketing in Admin › Discounts was used on one of those orders. Sales include GST and are before the cost of the work.</p>
+  <p style="font-size:13px"><a href="${APP}#/marketing/results" style="color:${BLUE}">Open Marketing in Hangr Ops</a></p>
+  </div></body></html>`;
+  const subject = `Marketing results, w/e ${dShort(r.week_end)}: ${T4.sent ?? 0} texts, ${money(T4.sales ?? 0, 0)} followed${e4 != null ? `, ${money(e4, 0)} extra` : ''} (last 4 weeks)`;
+  return { html, subject };
+}
+
 async function send(key: string, s: R, to: string[], subject: string, html: string) {
   const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ from: s.from_address, to, reply_to: s.reply_to || undefined, subject, html }) });
@@ -118,17 +195,27 @@ async function send(key: string, s: R, to: string[], subject: string, html: stri
   return body.id as string;
 }
 
+// one report, either kind: a store's week or the org's marketing results
+async function makeReport(client: R, svc: R, q: { kind?: string; store_id?: string; org_id?: string; week?: string | null; labour?: boolean }) {
+  if (q.kind === 'marketing') {
+    const { data: r, error } = await client.rpc('marketing_report', { p_org: q.org_id, p_week: q.week || null }); if (error) throw error;
+    return { ...buildMarketing(r), week_end: r.week_end, org_id: q.org_id, store_id: null };
+  }
+  const { data: r, error } = await client.rpc('store_week_report', { p_store: q.store_id, p_week: q.week || null }); if (error) throw error;
+  const { data: st } = await svc.from('stores').select('code,org_id').eq('id', q.store_id).single();
+  return { ...build({ ...r, store_code: st?.code }, { labour: q.labour ?? true }), week_end: r.week_end, org_id: st?.org_id, store_id: q.store_id };
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const svc = createClient(URL_, SRK);
   let p: R = {}; try { p = await req.json(); } catch { /* empty */ }
   try {
-    if (p.mode === 'render') {  // the scheduler's secret only: the email HTML for a store and week, nothing sent
+    if (p.mode === 'render') {  // the scheduler's secret only: the email HTML, nothing sent
       const { data: s } = await svc.rpc('report_settings_for', { p_secret: p.secret || '' });
       if (!s) return json({ error: 'not allowed' }, 401);
-      const { data: r, error } = await svc.rpc('store_week_report', { p_store: p.store_id, p_week: p.week || null }); if (error) throw error;
-      const { data: st } = await svc.from('stores').select('code').eq('id', p.store_id).single();
-      return json(build({ ...r, store_code: st?.code }, { labour: p.labour ?? true }));
+      const rep = await makeReport(svc, svc, p);
+      return json({ html: rep.html, subject: rep.subject });
     }
     if (p.mode === 'cron') {
       const { data: s } = await svc.rpc('report_settings_for', { p_secret: p.secret || '' });
@@ -136,16 +223,16 @@ Deno.serve(async req => {
       const { data: due, error } = await svc.rpc('reports_due'); if (error) throw error;
       const out = [];
       for (const d0 of due || []) {
-        const { data: r, error: e } = await svc.rpc('store_week_report', { p_store: d0.store_id, p_week: d0.week_end }); if (e) throw e;
-        const { data: st } = await svc.from('stores').select('code,org_id').eq('id', d0.store_id).single();
-        const { html, subject } = build({ ...r, store_code: st?.code }, { labour: d0.include_labour });
+        let rep: R;
+        try { rep = await makeReport(svc, svc, { kind: d0.kind, store_id: d0.store_id, org_id: d0.org_id, week: d0.week_end, labour: d0.include_labour }); }
+        catch (err) { out.push({ store: d0.store, error: String((err as Error).message || err) }); continue; }
         try {
           if (!s.resend_key) throw new Error('No Resend key set yet');
-          const id = await send(s.resend_key, s, d0.recipients, subject, html);
-          await svc.from('report_runs').insert({ schedule_id: d0.schedule_id, org_id: st!.org_id, store_id: d0.store_id, week_end: d0.week_end, status: 'sent', sent_to: d0.recipients, provider_id: id });
+          const id = await send(s.resend_key, s, d0.recipients, rep.subject, rep.html);
+          await svc.from('report_runs').insert({ schedule_id: d0.schedule_id, org_id: d0.org_id, store_id: d0.store_id, week_end: d0.week_end, status: 'sent', sent_to: d0.recipients, provider_id: id });
           out.push({ store: d0.store, sent: d0.recipients.length });
         } catch (err) {
-          await svc.from('report_runs').insert({ schedule_id: d0.schedule_id, org_id: st!.org_id, store_id: d0.store_id, week_end: d0.week_end, status: 'failed', sent_to: d0.recipients, error: String((err as Error).message || err) });
+          await svc.from('report_runs').insert({ schedule_id: d0.schedule_id, org_id: d0.org_id, store_id: d0.store_id, week_end: d0.week_end, status: 'failed', sent_to: d0.recipients, error: String((err as Error).message || err) });
           out.push({ store: d0.store, error: String((err as Error).message || err) });
         }
       }
@@ -162,17 +249,16 @@ Deno.serve(async req => {
     const auth = req.headers.get('Authorization') || '';
     const user = createClient(URL_, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: auth } } });
     const { data: u } = await user.auth.getUser(); if (!u?.user) return json({ error: 'log in first' }, 401);
-    const { data: r, error } = await user.rpc('store_week_report', { p_store: p.store_id, p_week: p.week || null }); if (error) throw error;
-    const { data: st } = await svc.from('stores').select('code,org_id').eq('id', p.store_id).single();
-    const { data: sch } = await svc.from('report_schedules').select('id,include_labour').eq('store_id', p.store_id).maybeSingle();
-    const { html, subject } = build({ ...r, store_code: st?.code }, { labour: p.labour ?? sch?.include_labour ?? true });
-    if (p.mode === 'preview') return json({ html, subject });
+    const schQ = svc.from('report_schedules').select('id,include_labour');
+    const { data: sch } = await (p.kind === 'marketing' ? schQ.eq('org_id', p.org_id).eq('kind', 'marketing') : schQ.eq('store_id', p.store_id)).maybeSingle();
+    const rep = await makeReport(user, svc, { ...p, labour: p.labour ?? sch?.include_labour ?? true });
+    if (p.mode === 'preview') return json({ html: rep.html, subject: rep.subject });
     if (p.mode === 'test') {
       const { data: s } = await svc.rpc('report_settings_service');
       if (!s?.resend_key) return json({ error: 'The sending key isn’t set up yet.' }, 400);
       const to = [u.user.email!];
-      const id = await send(s.resend_key, s, to, '[Test] ' + subject, html);
-      await svc.from('report_runs').insert({ schedule_id: sch?.id, org_id: st!.org_id, store_id: p.store_id, week_end: r.week_end, kind: 'test', status: 'sent', sent_to: to, provider_id: id });
+      const id = await send(s.resend_key, s, to, '[Test] ' + rep.subject, rep.html);
+      await svc.from('report_runs').insert({ schedule_id: sch?.id, org_id: rep.org_id, store_id: rep.store_id, week_end: rep.week_end, kind: 'test', status: 'sent', sent_to: to, provider_id: id });
       return json({ ok: true, to });
     }
     return json({ error: 'unknown mode' }, 400);
