@@ -33,9 +33,18 @@ const myStores = () => isAdmin() ? S.stores : S.stores.filter(s => memFor(S.org?
 
 /* ---------- auth ---------- */
 async function boot() {
+  const hashErr = new URLSearchParams(location.hash.replace(/^#/, '')).get('error_description');
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) return loginView();
+  if (!session) { if (hashErr) history.replaceState(null, '', location.pathname); return loginView(hashErr ? `That link didn't work (${hashErr}). Ask for a new one, or use Forgot password.` : ''); }
   S.user = session.user;
+  const setting = new URLSearchParams(location.search).has('set');
+  const { data: sec } = await sb.rpc('security_settings');
+  const needMfa = sec?.require_mfa !== false;
+  const { data: aal } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+  // someone with two-factor already set up proves it before anything else, even to change a password
+  if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') return mfaChallengeView();
+  if (setting) return setPasswordView();
+  if (needMfa && aal?.currentLevel !== 'aal2') return mfaEnrolView();
   const [pa, mem, orgs] = await Promise.all([
     sb.from('platform_admins').select('user_id').eq('user_id', S.user.id),
     sb.from('memberships').select('*').eq('user_id', S.user.id),
@@ -87,22 +96,81 @@ function loginView(msg = '') {
       <label>Email</label><input id="em" type="email" autocomplete="username" required>
       <label>Password</label><input id="pw" type="password" autocomplete="current-password" required minlength="8">
       <div class="row" style="margin-top:14px"><button class="btn">Sign in</button>
-      <button class="btn ghost" type="button" id="su">First time? Create login</button></div>
+      <button class="btn ghost" type="button" id="fp">Forgot password?</button></div>
+      <p class="note">New here? Ask David or your manager for an invite: it arrives by email.</p>
       <p class="note" id="lm">${esc(msg)}</p>
     </form></div>`;
   $('#lf').onsubmit = async e => {
     e.preventDefault();
     const { error } = await sb.auth.signInWithPassword({ email: $('#em').value.trim(), password: $('#pw').value });
-    if (error) $('#lm').innerHTML = `<span class="err">${esc(error.message === 'Email not confirmed' ? 'This login is waiting for David to activate it.' : error.message)}</span>`;
+    if (error) $('#lm').innerHTML = `<span class="err">${esc(error.message === 'Invalid login credentials' ? 'Email or password not right.' : error.message === 'Email not confirmed' ? 'Open the invite email first to set up this login.' : error.message)}</span>`;
     else boot();
   };
-  $('#su').onclick = async () => {
-    const email = $('#em').value.trim(), password = $('#pw').value;
-    if (!email || password.length < 8) { $('#lm').textContent = 'Enter your email and a password of at least 8 characters, then press Create login.'; return; }
-    const tryIn = await sb.auth.signInWithPassword({ email, password });
-    if (!tryIn.error) return boot(); // already active: just sign in
-    const { error } = await sb.auth.signUp({ email, password });
-    $('#lm').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Login created. Ask David to activate it, then sign in.';
+  $('#fp').onclick = async () => {
+    const email = $('#em').value.trim();
+    if (!email) { $('#lm').textContent = 'Type your email above first, then press Forgot password.'; return; }
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + '/?set=1' });
+    $('#lm').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'If that email has a login, a link to set a new password is on its way. It works for an hour.';
+  };
+}
+
+/* ---------- set a password (from an invite or reset link) ---------- */
+function setPasswordView() {
+  $('#hdr').hidden = true;
+  app.innerHTML = `<div class="card login"><h2>Set your password</h2><p class="note">For ${esc(S.user.email)}. At least 10 characters; a short sentence works well.</p>
+    <form id="spf"><label>New password</label><input id="np1" type="password" autocomplete="new-password" required minlength="10">
+    <label>Same again</label><input id="np2" type="password" autocomplete="new-password" required minlength="10">
+    <div class="row" style="margin-top:14px"><button class="btn">Save password</button></div><p class="note" id="spm"></p></form></div>`;
+  $('#spf').onsubmit = async e => {
+    e.preventDefault();
+    if ($('#np1').value !== $('#np2').value) return $('#spm').innerHTML = '<span class="err">The two passwords don\'t match.</span>';
+    const { error } = await sb.auth.updateUser({ password: $('#np1').value });
+    if (error) return $('#spm').innerHTML = `<span class="err">${esc(error.message)}</span>`;
+    history.replaceState(null, '', location.pathname); boot();
+  };
+}
+
+/* ---------- two-factor: an authenticator app code at every sign-in ---------- */
+async function mfaEnrolView() {
+  $('#hdr').hidden = true;
+  app.innerHTML = '<div class="card login"><p>Setting up two-factor…</p></div>';
+  const { data: f } = await sb.auth.mfa.listFactors();
+  for (const x of (f?.all || []).filter(x => x.status !== 'verified')) await sb.auth.mfa.unenroll({ factorId: x.id });
+  const { data, error } = await sb.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Hangr Ops ' + new Date().toISOString().slice(0, 16) });
+  if (error) { app.innerHTML = `<div class="card login"><p class="err">${esc(error.message)}</p><button class="btn ghost" onclick="signOut()">Sign out</button></div>`; return; }
+  app.innerHTML = `<div class="card login" style="max-width:460px"><h2>Turn on two-factor</h2>
+    <p>Hangr Ops holds customer details, so every sign-in needs a 6-digit code from your phone as well as your password. One-time setup:</p>
+    <ol style="padding-left:18px;line-height:1.6"><li>Install <b>Microsoft Authenticator</b> or <b>Google Authenticator</b> on your phone (free, from the app store).</li>
+    <li>In the app, add an account and scan this code:</li></ol>
+    <div style="text-align:center"><img src="${data.totp.qr_code}" alt="QR code" style="width:200px;height:200px"></div>
+    <p class="note">Can't scan? Choose "enter a setup key" in the app and type: <b style="word-break:break-all">${esc(data.totp.secret)}</b></p>
+    <ol start="3" style="padding-left:18px"><li>Type the 6-digit code the app shows:</li></ol>
+    <form id="mf"><input id="mc" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required style="font-size:20px;letter-spacing:4px;width:140px">
+    <button class="btn" style="margin-left:8px">Turn on</button></form><p class="note" id="mm"></p>
+    <p class="note">Signed in as ${esc(S.user.email)} · <a href="#" onclick="signOut();return false">sign out</a></p></div>`;
+  $('#mc').focus();
+  $('#mf').onsubmit = async e => {
+    e.preventDefault();
+    const { error: ve } = await sb.auth.mfa.challengeAndVerify({ factorId: data.id, code: $('#mc').value.trim() });
+    if (ve) return $('#mm').innerHTML = `<span class="err">${esc(ve.message.includes('Invalid') ? 'That code didn\'t match. Codes change every 30 seconds: try the current one.' : ve.message)}</span>`;
+    boot();
+  };
+}
+async function mfaChallengeView() {
+  $('#hdr').hidden = true;
+  const { data: f } = await sb.auth.mfa.listFactors();
+  const factor = (f?.totp || []).find(x => x.status === 'verified');
+  if (!factor) return mfaEnrolView();
+  app.innerHTML = `<div class="card login"><h2>Enter your code</h2><p class="note">The 6-digit code from your authenticator app for Hangr Ops.</p>
+    <form id="mf"><input id="mc" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required style="font-size:20px;letter-spacing:4px;width:140px">
+    <button class="btn" style="margin-left:8px">Continue</button></form><p class="note" id="mm"></p>
+    <p class="note">Lost your phone? Ask David to reset your two-factor. · <a href="#" onclick="signOut();return false">Sign out</a></p></div>`;
+  $('#mc').focus();
+  $('#mf').onsubmit = async e => {
+    e.preventDefault();
+    const { error } = await sb.auth.mfa.challengeAndVerify({ factorId: factor.id, code: $('#mc').value.trim() });
+    if (error) return $('#mm').innerHTML = `<span class="err">${esc(error.message.includes('Invalid') ? 'That code didn\'t match. Codes change every 30 seconds: try the current one.' : error.message)}</span>`;
+    boot();
   };
 }
 async function signOut() { await sb.auth.signOut(); location.hash = ''; location.reload(); }
@@ -766,23 +834,9 @@ async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say
 
 /* ---------- admin ---------- */
 async function adminView() {
-  const [mem, inv] = await Promise.all([
-    sb.from('memberships').select('*').eq('org_id', S.org.id),
-    sb.from('invites').select('*').eq('org_id', S.org.id).is('used_at', null)]);
-  const storeName = id => S.stores.find(s => s.id === id)?.name || '';
   const svc = S.services.slice().sort((a, b) => a.channel.localeCompare(b.channel) || a.name.localeCompare(b.name));
   app.innerHTML = `
-  <div class="card"><h2>People with access to ${esc(S.org.name)}</h2><div class="scroll"><table>
-    <tr><th>Name</th><th>Role</th><th>Store</th><th></th></tr>
-    ${(mem.data || []).map(m => `<tr><td>${esc(m.full_name || m.user_id)}</td><td>${roleName(m.role)}</td><td>${esc(storeName(m.store_id))}</td><td><button class="btn ghost" data-rm="${m.id}" style="padding:2px 8px">Remove</button></td></tr>`).join('') || '<tr><td colspan="4" class="mu">Only platform owners so far.</td></tr>'}
-    ${(inv.data || []).map(i => `<tr><td>${esc(i.full_name || '')} <span class="mu">${esc(i.email)}</span></td><td>${roleName(i.role)}</td><td>${esc(storeName(i.store_id))}</td><td class="mu">invited, not signed up</td></tr>`).join('')}
-  </table></div>
-  <h2 style="margin-top:16px">Invite someone</h2>
-  <div class="row"><input id="iName" placeholder="Name"><input id="iEmail" type="email" placeholder="Email">
-    <select id="iRole"><option value="store_manager">Store manager (one store)</option><option value="va">Uploads only (VA)</option><option value="org_admin">Admin (everything)</option></select>
-    <select id="iStore">${S.stores.filter(s => s.active).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
-    <button class="btn" id="iGo">Invite</button></div>
-  <p class="note">They then open this site, enter that email with a password and press "First time? Create login". Until email sending is set up, David activates each new login.</p><p id="iMsg"></p></div>
+  <div class="card" id="people"></div>
 
   <div class="card"><h2>Services <small>which POS services count as retail, commercial or restoration</small></h2><div class="scroll"><table>
     <tr><th>Service</th><th>Counts as</th><th>Marketing group</th></tr>
@@ -795,16 +849,9 @@ async function adminView() {
     ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>
   <div class="card" id="reports"></div>
   <div class="card" id="locks"></div>`;
+  peopleCard($('#people'));
   reportsCard($('#reports'));
   locksCard($('#locks'));
-  $('#iRole').onchange = () => $('#iStore').hidden = $('#iRole').value !== 'store_manager';
-  $('#iGo').onclick = async () => {
-    const role = $('#iRole').value, email = $('#iEmail').value.trim();
-    if (!email) return;
-    const { error } = await sb.from('invites').insert({ org_id: S.org.id, email, role, full_name: $('#iName').value.trim() || null, store_id: role === 'store_manager' ? $('#iStore').value : null });
-    $('#iMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Invited.'; if (!error) adminView();
-  };
-  app.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { if (confirm('Remove this person\'s access?')) { await sb.from('memberships').delete().eq('id', b.dataset.rm); adminView(); } });
   app.querySelectorAll('[data-grp]').forEach(el => el.onchange = async () => {
     const { error } = await sb.from('services').update({ offer_group: el.value || null }).eq('org_id', S.org.id).eq('name', el.dataset.grp);
     if (error) alert(error.message); else S.services.find(s => s.name === el.dataset.grp).offer_group = el.value || null;
@@ -814,6 +861,52 @@ async function adminView() {
     if (error) alert(error.message); else { S.services.find(s => s.name === el.dataset.svc).channel = el.value; S.cache = {}; }
   });
 }
+/* ---------- people: invite by email, roles, password resets, two-factor ---------- */
+async function peopleCall(body) {
+  const { data, error } = await sb.functions.invoke('admin-users', { body: { org_id: S.org.id, ...body } });
+  if (error || data?.error) throw new Error(data?.error || error.message);
+  return data;
+}
+async function peopleCard(el, note = '') {
+  el.innerHTML = `<h2>People with access to ${esc(S.org.name)}</h2><p class="note">Loading…</p>`;
+  let d; try { d = await peopleCall({ action: 'list' }); } catch (e) { el.innerHTML = `<h2>People</h2><p class="err">${esc(e.message)}</p>`; return; }
+  const storeName = id => S.stores.find(s => s.id === id)?.name || '';
+  const when = t => t ? new Date(t).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }) : '<span class="mu">never</span>';
+  const tf = x => x.two_factor ? '<span class="up">on</span>' : '<span class="dn">not yet</span>';
+  const roleSel = (m) => `<select data-role="${m.id}">${[['org_admin', 'Admin'], ['store_manager', 'Store manager'], ['va', 'Uploads only']].map(([v, n]) => `<option value="${v}" ${v === m.role ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    <select data-rstore="${m.id}" ${m.role === 'store_manager' ? '' : 'hidden'}>${S.stores.filter(s => s.active).map(s => `<option value="${s.id}" ${s.id === m.store_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>`;
+  el.innerHTML = `<h2>People with access to ${esc(S.org.name)}</h2>
+    <div class="scroll"><table><tr><th>Name</th><th>Email</th><th>Role</th><th>Two-factor</th><th>Last sign-in</th><th></th></tr>
+    ${d.owners.map(o => `<tr><td>Owner</td><td>${esc(o.email || '')}</td><td>Owner (every business)</td><td>${tf(o)}</td><td>${when(o.last_sign_in)}</td><td></td></tr>`).join('')}
+    ${d.members.map(m => `<tr><td>${esc(m.full_name || '')}</td><td>${esc(m.email || '')}</td><td>${roleSel(m)}</td><td>${tf(m)}</td><td>${when(m.last_sign_in)}</td>
+      <td style="white-space:nowrap"><button class="btn ghost" data-reset="${esc(m.email || '')}">Reset password</button>
+      ${d.can_reset_2fa && m.two_factor ? `<button class="btn ghost" data-r2fa="${m.user_id}">Reset two-factor</button>` : ''}
+      <button class="btn ghost" data-rm="${m.id}">Remove</button></td></tr>`).join('')}
+    ${d.invites.map(i => `<tr><td>${esc(i.full_name || '')}</td><td>${esc(i.email)}</td><td>${roleName(i.role)}${i.store_id ? ' · ' + esc(storeName(i.store_id)) : ''}</td><td class="mu">–</td><td class="mu">invited, not set up yet</td>
+      <td style="white-space:nowrap"><button class="btn ghost" data-resend="${esc(i.email)}">Send invite again</button> <button class="btn ghost" data-rminv="${i.id}">Cancel</button></td></tr>`).join('')}
+    </table></div>
+    <h3 style="margin-top:14px">Invite someone</h3>
+    <div class="row"><input id="iName" placeholder="Name"><input id="iEmail" type="email" placeholder="Email" style="width:220px">
+      <select id="iRole"><option value="store_manager">Store manager (one store)</option><option value="va">Uploads only (VA)</option><option value="org_admin">Admin (everything)</option></select>
+      <select id="iStore">${S.stores.filter(s => s.active).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+      <button class="btn" id="iGo">Send invite</button></div>
+    <p class="note">They get an email from Hangr Ops with a link to set their password, then set up two-factor on their phone. Store managers see only their store. Invite links work for 24 hours; "Send invite again" makes a fresh one.</p>
+    <p id="iMsg">${note}</p>`;
+  const say = (m, bad) => el.querySelector('#iMsg').innerHTML = bad ? `<span class="err">${esc(m)}</span>` : `<span class="up">${esc(m)}</span>`;
+  const run = async (body, confirmMsg) => { if (confirmMsg && !confirm(confirmMsg)) return; try { const r = await peopleCall(body); peopleCard(el, `<span class="up">${esc(r.message || 'Done.')}</span>`); } catch (e) { say(e.message, true); } };
+  el.querySelector('#iRole').onchange = () => el.querySelector('#iStore').hidden = el.querySelector('#iRole').value !== 'store_manager';
+  el.querySelector('#iGo').onclick = () => { const role = el.querySelector('#iRole').value;
+    run({ action: 'invite', email: el.querySelector('#iEmail').value, full_name: el.querySelector('#iName').value.trim(), role, store_id: role === 'store_manager' ? el.querySelector('#iStore').value : null }); };
+  el.querySelectorAll('[data-role]').forEach(sel => sel.onchange = () => { const st = el.querySelector(`[data-rstore="${sel.dataset.role}"]`); st.hidden = sel.value !== 'store_manager';
+    run({ action: 'set_role', membership_id: sel.dataset.role, role: sel.value, store_id: st.value }); });
+  el.querySelectorAll('[data-rstore]').forEach(st => st.onchange = () => run({ action: 'set_role', membership_id: st.dataset.rstore, role: 'store_manager', store_id: st.value }));
+  el.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => run({ action: 'reset_password', email: b.dataset.reset }, `Email a password reset link to ${b.dataset.reset}?`));
+  el.querySelectorAll('[data-r2fa]').forEach(b => b.onclick = () => run({ action: 'reset_2fa', user_id: b.dataset.r2fa }, 'Reset their two-factor? They\'ll set it up again with their phone at the next sign-in.'));
+  el.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => run({ action: 'remove', membership_id: b.dataset.rm }, 'Remove this person\'s access?'));
+  el.querySelectorAll('[data-rminv]').forEach(b => b.onclick = () => run({ action: 'remove', invite_id: b.dataset.rminv }, 'Cancel this invite?'));
+  el.querySelectorAll('[data-resend]').forEach(b => b.onclick = () => run({ action: 'resend', email: b.dataset.resend }));
+}
+
 /* ---------- Monday store reports: who gets which store, and when ---------- */
 const REPORT_DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 async function reportsCard(el) {
