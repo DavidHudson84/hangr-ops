@@ -858,7 +858,7 @@ async function loadDiscounts(wb, file, from, to, say, override) {
     if (b) { d = { store: store?.name || String(a), name: String(b).trim(), pieces: toNum(val(r, c.pieces)), orders: toNum(val(r, c.orders)), lines: [] }; blocks.push(d); continue; }
     if (!d || !store || store === 'ignore') continue;
     const id = receiptOf(cell(r, c.order)); if (!id) { nolink++; continue; }
-    const line = { store: store.name, receipt: id, order_no: String(cell(r, c.order)?.v || (String(cell(r, c.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''),
+    const line = { store: store.name, receipt: id, order_no: String(cell(r, c.order)?.v || ((String(cell(r, c.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? '')),
       discount_name: d.name, discount: Math.round(toNum(val(r, c.disc)) * 100) / 100, sales: Math.round(toNum(val(r, c.sales)) * 100) / 100,
       pieces: Math.round(toNum(val(r, c.pieces))), start_date: parseDate(val(r, c.start)), status: val(r, c.status) ? String(val(r, c.status)) : null, employee: val(r, c.emp) ? String(val(r, c.emp)) : null };
     d.lines.push(line); if (line.discount !== 0) rows.push(line);
