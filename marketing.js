@@ -3,7 +3,9 @@
    while Settings > mode is test or live. */
 
 const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['test', 'Test texts'], ['programs', 'Yearly & reminders'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
-const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
+// real SMS parts: any emoji or curly quote makes the whole text 70 per part (67 split); ~^{}[]\|€ count double in plain text
+const GSM = /^[A-Za-z0-9 \n\r@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà~^{}\[\]\\|€]*$/;
+const segs = t => { const n = [...t].length; if (!GSM.test(t)) return n <= 70 ? 1 : Math.ceil(n / 67); const m = n + (t.match(/[~^{}\[\]\\|€]/g) || []).length; return m <= 160 ? 1 : Math.ceil(m / 153); };
 let FOOT = ' David from Master Dry Cleaners here. Reply STOP to opt out.';  // intro + opt-out, reset from Sending settings below
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
 
