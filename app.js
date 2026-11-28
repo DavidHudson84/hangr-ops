@@ -486,6 +486,19 @@ async function serviceCard(id) {
       : `<tr class="mu"><td>${n}</td><td colspan="4">never</td></tr>`; }).join('')}
   </table></div><p class="note">From the Sales Incoming by service and order uploads. An order with two services counts under both.</p></div>`;
 }
+async function customerHistoryCard(id) {
+  const { data: h } = await sb.rpc('customer_marketing_history', { p_customer: id });
+  if (!h || (!h.texts.length && !h.discounts.length)) return '';
+  return `<div class="card"><h2>Marketing history <small>texts received and what followed</small></h2><div class="scroll"><table>
+    <tr><th>Sent</th><th>Message</th><th>Result</th><th>Orders</th><th>Sales</th><th>Discount used</th></tr>
+    ${h.texts.map(t => `<tr><td>${new Date(t.at).toLocaleDateString('en-AU')}</td><td>${esc(t.template || t.category)}${t.held_back ? ' <span class="chip">held back</span>' : ''}</td>
+      <td>${t.orders ? `<span class="up">ordered ${fmtD(t.first_order)}</span>` : `<span class="mu">no order by ${fmtD(t.window_to === 'infinity' ? null : t.window_to)}</span>`}</td>
+      <td>${num(t.orders)}</td><td>${money(t.sales, 2)}</td><td>${t.redeemed ? `${esc(t.discounts)} (${money(t.discount, 2)})` : '<span class="mu">–</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="mu">No texts yet</td></tr>'}
+  </table></div>
+  ${h.discounts.length ? `<h3 style="margin-top:12px">Discounts on their orders</h3><div class="scroll"><table><tr><th>Order date</th><th>Discount</th><th>Off</th><th>Order total</th><th>Store</th><th>Served by</th></tr>
+    ${h.discounts.map(x => `<tr><td>${fmtD(x.date)}</td><td>${esc(x.name)}</td><td>${money(x.discount, 2)}</td><td>${money(x.sales, 2)}</td><td>${esc(x.store)}</td><td class="mu">${esc(x.employee || '')}</td></tr>`).join('')}</table></div>` : ''}
+  <p class="note">A text is credited with the customer's orders until its window closes (14 days for offers, 21 for win-backs, 28 for welcomes, 7 for collection reminders) or their next text arrives, whichever is first.</p></div>`;
+}
 async function customerView(id) {
   const [{ data: c }, { data: orders }] = await Promise.all([
     sb.from('v_customers').select('*').eq('id', id).maybeSingle(),
@@ -507,6 +520,7 @@ async function customerView(id) {
   </div>
   ${await serviceCard(id)}
   ${isAdmin() ? await customerMarketingCard(c) : ''}
+  ${isAdmin() ? await customerHistoryCard(id) : ''}
   <div class="card"><h2>Orders <small>latest 200</small></h2><div class="scroll"><table><tr><th>Date</th><th>Time</th><th>Status</th><th>Picked up</th><th>Pieces</th><th>Total</th></tr>
     ${(orders || []).map(o => `<tr><td>${fmtD(o.order_date)}</td><td>${o.order_time ? o.order_time.slice(0, 5) : ''}</td><td>${esc(o.status || '')}</td><td>${fmtD(o.picked_up_date)}</td><td>${num(o.pieces)}</td><td>${money(o.sales, 2)}</td></tr>`).join('')}
   </table></div></div>`;
@@ -527,7 +541,7 @@ async function uploadView() {
     <p>Drop in any number of <b>Sales Incoming</b> or <b>Customer Orders</b> Excel files. Each file is checked, then loaded. Loading the same file twice is safe: it replaces what was there, it never adds twice.</p>
     <div class="drop" id="drop">Drop .xlsx files here, or <label style="display:inline;color:var(--blue);cursor:pointer"><input type="file" id="fi" accept=".xlsx,.xls" multiple hidden>choose files</label></div>
     <div class="log" id="log"></div>
-    <p class="note">Each week: <b>Sales Incoming by Store, Service and Order</b> (Include discounts ticked) first, then <b>Customer Orders</b>, both Monday to Sunday. Backfill: one whole calendar month per file. A file is only loaded if it's complete and adds up; anything that looks wrong is stopped with the reason. Every loaded period is then locked, so old reports never change; only David can unlock one.</p>
+    <p class="note">Each week, Monday to Sunday: <b>Sales Incoming by Store, Service and Order</b> (Include discounts ticked) first, then <b>Customer Orders</b>, then <b>Coupons and Discounts</b> (Paid and Active ticked, grouped Store, Discount, Order). Backfill: one whole calendar month per file. A file is only loaded if it's complete and adds up; anything that looks wrong is stopped with the reason. Every loaded period is then locked, so old reports never change; only David can unlock one.</p>
   </div>
   <div class="card"><h2>Recent uploads</h2><div class="scroll"><table><tr><th>When</th><th>File</th><th>Type</th><th>Covers</th><th>Rows</th><th>Status</th></tr>
     ${(ups || []).map(u => `<tr><td>${new Date(u.created_at).toLocaleString('en-AU')}</td><td>${esc(u.file_name)}</td><td>${u.kind}${u.grain ? ' · ' + u.grain : ''}</td><td>${u.date_from ? fmtD(u.date_from) + ' – ' + fmtD(u.date_to) : '–'}</td><td>${num(u.rows_in)}</td><td>${u.status}</td></tr>`).join('')}
@@ -588,7 +602,13 @@ async function uploadGate(kind, grain, from, to, f, override) {
     const missing = (ck.expected || []).filter(n => !inFile.has(n));
     if (missing.length) soft.push(`<b>${missing.map(esc).join(', ')}</b> ${missing.length === 1 ? "isn't" : "aren't"} in this file, but traded in the weeks before. Check every store is selected on the filter screen and export again. If a store has closed, tell David.`);
     const ex = new Map((ck.existing || []).map(e => [e.store, e]));
-    if (kind !== 'orders') {
+    if (kind === 'discounts') {
+      if (ck.locked && ex.size) {
+        const same = [...ex].every(([n, e]) => f.stores.has(n) && f.stores.get(n).lines === e.lines && Math.abs(f.stores.get(n).discount - e.discount) <= 0.5);
+        if (same) return { already: true };
+        hard.push(`Discounts for ${when} are already loaded and <b>locked</b>, and this file is different (${[...ex].map(([n, e]) => `${esc(n)}: ${num(e.lines)} discounted orders locked, ${num(f.stores.get(n)?.lines || 0)} in this file`).join('; ')}). Don't upload it. Send David a screenshot: only he can unlock it.`);
+      }
+    } else if (kind !== 'orders') {
       if (ck.locked) {
         const off = [...f.stores].filter(([n, v]) => ex.has(n) && (Math.abs(v.sales - ex.get(n).sales) > 0.5 || (ex.get(n).discounts && Math.abs(v.discounts - ex.get(n).discounts) > 0.5)));
         const gone = [...ex.keys()].filter(n => !inFile.has(n));
@@ -667,6 +687,7 @@ async function loadFile(file, say, override = false) {
   const from = parseDate(dm[1]), to = parseDate(dm[2]);
   if (!from || !to) throw new Error(`Couldn't read the date range "${dm[0]}".`);
   const head = (grid[3] || []).map(h => String(h ?? '').trim().toLowerCase());
+  if (/coupons and discounts/i.test(title)) return loadDiscounts(wb, file, from, to, say, override);
   const isCustOrders = head.includes('first order') || head.includes('last order');
   if (!isCustOrders && wb.SheetNames.includes('Flat') && head.includes('service') && head.includes('order')) return loadServiceOrders(wb, file, from, to, say, override);
   if (!isCustOrders && wb.SheetNames.includes('Flat') && !head.includes('service')) throw new UploadStop(["This Sales Incoming wasn't grouped by <b>Store, Service and Order</b>. Tick all three groupings on the filter screen and export again."], [], []);
@@ -818,6 +839,49 @@ async function loadServiceOrders(wb, file, from, to, say, override) {
   return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated.${msg}${warnHtml(g.warn)} Locked. <span class="up">Done.</span>`;
 }
 
+// Coupons and Discounts (Paid, grouped Store > Discount > Order). The POS's own subtotals for percentage discounts
+// are wrong (multiplied by the number of orders), so totals come from the order lines; pieces are what must agree.
+async function loadDiscounts(wb, file, from, to, say, override) {
+  const ws = wb.Sheets[wb.SheetNames[0]], range = XLSX.utils.decode_range(ws['!ref']);
+  const cell = (r, c) => ws[XLSX.utils.encode_cell({ r, c })];
+  const val = (r, c) => { const v = cell(r, c)?.v; return (typeof v === 'string' && v.trim() === '') ? null : v ?? null; };
+  const hd = []; for (let c = 0; c <= range.e.c; c++) hd.push(String(val(3, c) ?? '').trim().toLowerCase());
+  const ci = n => hd.indexOf(n);
+  const c = { order: ci('order'), disc: ci('$ discounts'), sales: ci('$ sales'), orders: ci('# order'), pieces: ci('# pieces'), start: ci('start date'), status: ci('status'), emp: ci('employee') };
+  if (c.order < 0 || c.disc < 0 || c.sales < 0 || c.pieces < 0) throw new UploadStop(["This Coupons and Discounts file is missing some of the standard columns. Group it by <b>Store, Discount and Order</b>, export again and upload it without editing."], [], []);
+  const hard = [], soft = [], warn = [];
+  const grain = periodOf(from, to); periodChecks(hard, from, to, grain === 'day' ? null : grain, false);
+  const rows = [], blocks = [], unknown = new Set(); let store = null, d = null, total = false, nolink = 0;
+  for (let r = 4; r <= range.e.r; r++) {
+    const a = val(r, 0), b = val(r, 1);
+    if (a) { if (/^total$/i.test(String(a).trim())) { total = true; store = 'ignore'; continue; } store = storeFor(a); if (!store) unknown.add(a); d = null; continue; }
+    if (b) { d = { store: store?.name || String(a), name: String(b).trim(), pieces: toNum(val(r, c.pieces)), orders: toNum(val(r, c.orders)), lines: [] }; blocks.push(d); continue; }
+    if (!d || !store || store === 'ignore') continue;
+    const id = receiptOf(cell(r, c.order)); if (!id) { nolink++; continue; }
+    const line = { store: store.name, receipt: id, order_no: String(cell(r, c.order)?.v || (String(cell(r, c.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''),
+      discount_name: d.name, discount: Math.round(toNum(val(r, c.disc)) * 100) / 100, sales: Math.round(toNum(val(r, c.sales)) * 100) / 100,
+      pieces: Math.round(toNum(val(r, c.pieces))), start_date: parseDate(val(r, c.start)), status: val(r, c.status) ? String(val(r, c.status)) : null, employee: val(r, c.emp) ? String(val(r, c.emp)) : null };
+    d.lines.push(line); if (line.discount !== 0) rows.push(line);
+  }
+  if (unknown.size) hard.push(`This file has a store Hangr Ops doesn't know: <b>${[...unknown].map(esc).join(', ')}</b>. Send David a screenshot so he can add it.`);
+  if (nolink) hard.push(`${num(nolink)} orders have no receipt link, so the file has been opened and re-saved, or edited. Export again and upload it as it comes from the POS.`);
+  if (!total) hard.push('There is no Total line at the bottom, so the file may have been cut short. Export it again.');
+  const bad = blocks.filter(b => Math.round(b.lines.reduce((t, l) => t + l.pieces, 0)) !== Math.round(b.pieces) || (!/^freeflow/i.test(b.name) && b.orders && b.lines.length !== Math.round(b.orders)));
+  if (bad.length && !nolink) hard.push(`The file doesn't add up for ${bad.slice(0, 4).map(b => `${esc(b.store)} › ${esc(b.name)}`).join('; ')}: its orders don't match its total line. Export again and upload without editing.`);
+  if (!blocks.length) hard.push('This file has no discounts in it. Check the dates, tick Paid and Active, and export again.');
+  const known = new Set((await sb.from('discount_types').select('name,purpose').eq('org_id', S.org.id)).data?.filter(x => x.purpose !== 'unsorted').map(x => x.name) || []);
+  const fresh = [...new Set(blocks.map(b => b.name))].filter(n => !known.has(n));
+  if (fresh.length) warn.push(`New discount name${fresh.length > 1 ? 's' : ''}: ${fresh.map(esc).join(', ')}. David sets what ${fresh.length > 1 ? 'they are' : 'it is'} for in Admin › Discounts.`);
+  const st = new Map(); for (const r of rows) { const v = st.get(r.store) || { lines: 0, discount: 0 }; v.lines++; v.discount += r.discount; st.set(r.store, v); }
+  for (const b of blocks) if (!st.has(b.store)) st.set(b.store, { lines: 0, discount: 0 });
+  const g = await uploadGate('discounts', grain, from, to, { stores: st, hard, soft, warn }, override);
+  if (g.already) return `already loaded and locked for ${fmtD(from)} – ${fmtD(to)}, and this file matches it. Nothing to do. <span class="up">Done.</span>`;
+  say(`Coupons and Discounts ${fmtD(from)} – ${fmtD(to)}, ${num(rows.length)} discounted orders. Loading…`);
+  const n = await pushUpload('discounts', file.name, grain, from, to, [...st.keys()], rows, 'ingest_discounts', say);
+  const tot = rows.reduce((t, r) => t + r.discount, 0);
+  return `loaded ${num(n)} discounted orders (${money(tot, 2)} off), ${fmtD(from)} – ${fmtD(to)}.${warnHtml(g.warn)} Locked. <span class="up">Done.</span>`;
+}
+
 async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say, beforeFinish) {
   const { data: uid, error } = await sb.rpc('upload_begin', { p_org: S.org.id, p_kind: kind, p_file: fileName, p_grain: grain, p_from: from, p_to: to, p_stores: stores });
   if (error) throw error;
@@ -847,9 +911,11 @@ async function adminView() {
   <div class="card"><h2>Stores</h2><div class="scroll"><table><tr><th>Store</th><th>Type</th><th>Active</th></tr>
     ${S.stores.map(s => `<tr><td>${esc(s.name)}</td><td>${s.channel}</td><td>${s.active ? 'Yes' : 'No'}</td></tr>`).join('')}</table></div>
     ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>
+  <div class="card" id="discountTypes"></div>
   <div class="card" id="reports"></div>
   <div class="card" id="locks"></div>`;
   peopleCard($('#people'));
+  discountTypesCard($('#discountTypes'));
   reportsCard($('#reports'));
   locksCard($('#locks'));
   app.querySelectorAll('[data-grp]').forEach(el => el.onchange = async () => {
@@ -861,6 +927,24 @@ async function adminView() {
     if (error) alert(error.message); else { S.services.find(s => s.name === el.dataset.svc).channel = el.value; S.cache = {}; }
   });
 }
+/* ---------- discounts: what each POS discount is for ---------- */
+const PURPOSES = [['marketing', 'Marketing offer (texts, flyers)'], ['loyalty', 'Loyalty / VIP'], ['counter', 'Counter discount (staff discretion)'], ['staff', 'Staff discount'], ['other', 'Other'], ['unsorted', 'Not set yet']];
+async function discountTypesCard(el) {
+  const [{ data: dt }, { data: lib }] = await Promise.all([
+    sb.from('discount_types').select('*').eq('org_id', S.org.id).order('name'),
+    sb.from('offer_library').select('slot,name').eq('org_id', S.org.id).order('slot')]);
+  el.innerHTML = `<h2>Discounts <small>what each POS discount is for</small></h2>
+    <p class="note">Each discount the counter uses in My Clean POS appears here once a Coupons and Discounts report is uploaded. Marketing ones are matched to the texts a customer received, so every offer shows who redeemed it. Give each offer its own POS discount (e.g. "Doona offer 20%") so results don't mix.</p>
+    <div class="scroll"><table><tr><th>POS discount</th><th>What it's for</th><th>Offer it belongs to</th><th>Note</th></tr>
+    ${(dt || []).map(d => `<tr><td><b>${esc(d.name)}</b></td>
+      <td><select data-dp="${esc(d.name)}">${PURPOSES.map(([v, n]) => `<option value="${v}" ${v === d.purpose ? 'selected' : ''}>${n}</option>`).join('')}</select></td>
+      <td><select data-ds="${esc(d.name)}"><option value="">none</option>${(lib || []).map(o => `<option value="${o.slot}" ${o.slot === d.offer_slot ? 'selected' : ''}>${o.slot}. ${esc(o.name)}</option>`).join('')}</select></td>
+      <td class="mu">${esc(d.note || '')}</td></tr>`).join('') || '<tr><td colspan="4" class="mu">None yet: upload a Coupons and Discounts report.</td></tr>'}</table></div>`;
+  const save = async (name, patch) => { const { error } = await sb.from('discount_types').update({ ...patch, note: null, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('name', name); if (error) alert(error.message); };
+  el.querySelectorAll('[data-dp]').forEach(x => x.onchange = () => save(x.dataset.dp, { purpose: x.value }));
+  el.querySelectorAll('[data-ds]').forEach(x => x.onchange = () => save(x.dataset.ds, { offer_slot: x.value ? +x.value : null }));
+}
+
 /* ---------- people: invite by email, roles, password resets, two-factor ---------- */
 async function peopleCall(body) {
   const { data, error } = await sb.functions.invoke('admin-users', { body: { org_id: S.org.id, ...body } });

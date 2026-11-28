@@ -182,14 +182,45 @@ async function mkResults(el) {
     sb.from('sms_sends').select('category,status,scheduled_for').eq('org_id', S.org.id).in('status', ['queued', 'pending']).limit(20000),
     sb.from('sms_sends').select('created_at,sent_at,category,template_key,mobile,status,error,customer_id').eq('org_id', S.org.id).not('status', 'in', '(pending,queued)').order('created_at', { ascending: false }).limit(40)]);
   const qb = {}; (q || []).forEach(r => { const d = r.status === 'pending' ? 'awaiting approval' : r.scheduled_for ? new Date(r.scheduled_for).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' }) : 'next slot'; const k = `${d}|${r.category}`; qb[k] = (qb[k] || 0) + 1; });
-  el.innerHTML = `<div class="card"><h2>Results, last 180 days <small>an order within 30 days of the text, against the 10% held back</small></h2><div class="scroll"><table>
-    <tr><th>Message</th><th>Sent</th><th>Ordered</th><th>Held back</th><th>Held back ordered</th><th>Lift</th><th>$/ticket sent</th><th>$/ticket held back</th><th>Sales (sent)</th><th>SMS cost</th></tr>
-    ${(res || []).map(r => { const a = r.sent ? r.sent_ordered / r.sent : null, b = r.held ? r.held_ordered / r.held : null; return `<tr><td>${esc(r.template_key || r.category)}</td><td>${num(r.sent)}</td><td>${a == null ? '–' : (a * 100).toFixed(1) + '%'}</td><td>${num(r.held)}</td><td>${b == null ? '–' : (b * 100).toFixed(1) + '%'}</td><td>${a != null && b != null ? pctTxt(a - b) : '–'}</td><td>${r.sent_orders ? money(r.sent_sales / r.sent_orders, 2) : '–'}</td><td>${r.held_orders ? money(r.held_sales / r.held_orders, 2) : '–'}</td><td>${money(r.sent_sales)}</td><td>${money(r.cost, 2)}</td></tr>`; }).join('') || '<tr><td colspan="10" class="mu">Nothing sent yet</td></tr>'}
-  </table></div><p class="note">"Lift" is the difference in the share who ordered; the $/ticket columns show whether the offer made orders bigger. It needs a few hundred messages before it means much.</p></div>
+  const rr = (res || []).map(r => { const a = r.sent ? r.sent_sales / r.sent : 0, h = r.held ? r.held_sales / r.held : 0, inc = r.held >= 20 ? (a - h) * r.sent : null;
+    return { ...r, perSent: a, perHeld: h, inc, roi: inc != null && r.cost > 0 ? inc / r.cost : null }; });
+  const tot = rr.reduce((t, r) => ({ sent: t.sent + r.sent, sales: t.sales + +r.sent_sales, cost: t.cost + +r.cost, red: t.red + +r.sent_redeemed, inc: t.inc + (r.inc || 0), disc: t.disc + +r.discount_given }), { sent: 0, sales: 0, cost: 0, red: 0, inc: 0, disc: 0 });
+  const pc = (x, n) => n ? (x / n * 100).toFixed(1) + '%' : '–';
+  el.innerHTML = `<div class="card"><h2>Did it work? <small>last 180 days · each text against the customers held back from it</small></h2>
+    <div class="grid g4" style="margin-bottom:10px">
+      <div class="tile"><div class="l">Texts sent</div><div class="v">${num(tot.sent)}</div><div class="d">${money(tot.cost, 2)} in SMS</div></div>
+      <div class="tile"><div class="l">Sales that followed</div><div class="v">${money(tot.sales)}</div><div class="d">orders inside each text's window</div></div>
+      <div class="tile"><div class="l">Extra sales the texts caused</div><div class="v">${money(tot.inc)}</div><div class="d">above what the held-back group spent</div></div>
+      <div class="tile"><div class="l">Offer discounts redeemed</div><div class="v">${num(tot.red)}</div><div class="d">${money(tot.disc, 2)} given away</div></div></div>
+    <div class="scroll"><table>
+    <tr><th>Message</th><th>Sent</th><th>Ordered</th><th>Redeemed offer</th><th>Held back</th><th>Held back ordered</th><th>Sales per text</th><th>Sales per held back</th><th>Extra sales</th><th>SMS cost</th><th>Discount given</th><th>Return per $1 of SMS</th></tr>
+    ${rr.map(r => `<tr><td>${esc(r.template_key || r.category)}<div class="mu" style="font-size:12px">from ${fmtD(String(r.first_at).slice(0, 10))}</div></td><td>${num(r.sent)}</td><td>${pc(r.sent_ordered, r.sent)}</td><td>${pc(r.sent_redeemed, r.sent)}</td>
+      <td>${num(r.held)}</td><td>${pc(r.held_ordered, r.held)}</td><td>${money(r.perSent, 2)}</td><td>${r.held ? money(r.perHeld, 2) : '–'}</td>
+      <td>${r.inc == null ? '<span class="mu">too few held back</span>' : `<span class="${r.inc >= 0 ? 'up' : 'dn'}">${money(r.inc)}</span>`}</td><td>${money(r.cost, 2)}</td><td>${money(r.discount_given, 2)}</td>
+      <td>${r.roi == null ? '–' : `<b>${money(r.roi, 2)}</b>`}</td></tr>`).join('') || '<tr><td colspan="12" class="mu">Nothing sent yet</td></tr>'}
+  </table></div><p class="note"><b>How it's worked out.</b> Each text is credited with the customer's orders inside its window (14 days for offers, 21 for win-backs, 28 for welcomes, 7 for collection reminders), or until their next text, so no sale is counted twice. "Redeemed offer" means a discount set up as Marketing in Admin › Discounts was used on one of those orders. "Extra sales" is sales per text minus sales per held-back customer, times texts sent: the honest number, because the held-back customers show what would have happened anyway. It needs 20+ held back before it's shown. Sales include GST; take off discounts given and the cost of the work for margin.</p></div>
+  <div class="card" id="discUse"></div>
   <div class="card"><h2>Waiting to go</h2><div class="scroll"><table><tr><th>When</th><th>Type</th><th>Messages</th></tr>
     ${Object.entries(qb).map(([k, v]) => { const [d, c] = k.split('|'); return `<tr><td>${esc(d)}</td><td>${esc(c)}</td><td>${num(v)}</td></tr>`; }).join('') || '<tr><td colspan="3" class="mu">Queue is empty</td></tr>'}</table></div></div>
   <div class="card"><h2>Latest activity</h2><div class="scroll"><table><tr><th>When</th><th>Type</th><th>Mobile</th><th>Status</th><th>Note</th></tr>
     ${(recent || []).map(r => `<tr><td>${new Date(r.sent_at || r.created_at).toLocaleString('en-AU')}</td><td>${esc(r.template_key || r.category)}</td><td>${r.customer_id ? `<a href="#/customer/${r.customer_id}">${esc(r.mobile)}</a>` : esc(r.mobile)}</td><td>${statusChip(r.status)}</td><td class="mu">${esc(r.error || '')}</td></tr>`).join('')}</table></div></div>`;
+  discountUseCard($('#discUse'));
+}
+async function discountUseCard(el) {
+  const to = iso(new Date()), from = addDays(to, -91);
+  const { data: d } = await sb.rpc('discount_report', { p_org: S.org.id, p_from: from, p_to: to });
+  if (!d || !d.by_discount.length) { el.innerHTML = '<h2>Discounts used</h2><p class="note">Upload the weekly Coupons and Discounts report to see which offers were redeemed, by whom and where.</p>'; return; }
+  const purpose = Object.fromEntries(PURPOSES);
+  const stores = [...new Set(d.by_store.map(x => x.store))], names = d.by_discount.map(x => x.name);
+  const cellFor = (st, n) => { const x = d.by_store.find(y => y.store === st && y.name === n); return x ? `${num(x.orders)} · ${money(x.discount)}` : '<span class="mu">–</span>'; };
+  el.innerHTML = `<h2>Discounts used <small>last 13 weeks loaded · orders paid</small></h2><div class="scroll"><table>
+    <tr><th>POS discount</th><th>For</th><th>Orders</th><th>Customers</th><th>Off</th><th>Order value</th><th>Avg off</th><th>Customers texted in the 30 days before</th></tr>
+    ${d.by_discount.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(purpose[x.purpose] || x.purpose)}</td><td>${num(x.orders)}</td><td>${num(x.customers)}${x.unmatched ? ` <span class="mu">(${num(x.unmatched)} orders not matched yet)</span>` : ''}</td>
+      <td>${money(x.discount, 2)}</td><td>${money(x.sales, 2)}</td><td>${x.orders ? money(x.discount / x.orders, 2) : '–'}</td><td>${x.customers ? `${num(x.texted_customers)} (${(x.texted_customers / x.customers * 100).toFixed(0)}%)` : '–'}</td></tr>`).join('')}
+  </table></div>
+  <h3 style="margin-top:12px">By store <small>orders · $ off</small></h3><div class="scroll"><table><tr><th>POS discount</th>${stores.map(s => `<th>${esc(s)}</th>`).join('')}</tr>
+    ${names.map(n => `<tr><td>${esc(n)}</td>${stores.map(st => `<td>${cellFor(st, n)}</td>`).join('')}</tr>`).join('')}</table></div>
+  <p class="note">Orders are matched to customers through the Sales Incoming by service and order upload; older orders match as Huward's backfill lands. Set what each discount is for in Admin › Discounts.</p>`;
 }
 
 /* ---------- opt-outs ---------- */
