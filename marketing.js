@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['report', 'Report'], ['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['programs', 'Yearly & reminders'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -19,7 +19,7 @@ async function marketingView(tab = 'offers') {
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
   <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
-  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
+  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, programs: mkPrograms, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));
 }
 
@@ -35,7 +35,7 @@ async function mkOffers(el) {
   // which offer each group gets in a period (same rule as app.offer_slot)
   const slotFor = (i, g) => ((i + g) % 6) + 1;
   el.innerHTML = `<div class="card"><h2>How it works</h2>
-    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in six waves about 8 days apart, one group and one offer per wave, so the plant knows which service is coming and each wave's response can be read before the next. 10% are held back to measure what each offer won. Customers whose average ticket is under the cut-off get the low-spender offer every period instead. Nothing is queued until you approve a period.</p></div>
+    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in six waves on six sending days in a row (the gap is set in Sending), one group and one offer per wave, so the counters see one offer at a time and each wave's response can be read on its own. 10% are held back to measure what each offer won. Customers whose average ticket is under the cut-off get the low-spender offer every period instead. Nothing is queued until you approve a period.</p></div>
   <div class="card"><h2>The six offers</h2>
     ${(lib || []).map(o => `<div class="card" style="margin:10px 0" id="ol-${o.slot}">
       <div class="row"><b>Offer ${o.slot}: </b><input data-name value="${esc(o.name)}" style="flex:1;max-width:420px"><span class="note">${esc(o.note || '')}</span></div>
@@ -154,7 +154,7 @@ async function mkCampaigns(el) {
     <div class="row" style="margin-top:10px"><button class="btn ghost" id="cPrev">Preview</button><button class="btn" id="cMake">Create for approval</button><span id="cMsg" class="note"></span></div>
     <p class="note">Blank boxes mean everyone. Average ticket is the customer's spend per order over the last 12 months (lifetime if they haven't ordered this year). Account customers, opt-outs, do-not-contact and anyone already at 2 marketing texts this month are left out. 10% are held back to measure results.</p></div>
   <div class="card"><h2>Campaigns</h2><div class="scroll"><table><tr><th>Created</th><th>Name</th><th>Message</th><th>Status</th><th></th></tr>
-    ${(camps || []).map(c => `<tr><td>${new Date(c.created_at).toLocaleDateString('en-AU')}</td><td>${esc(c.name)}</td><td style="white-space:normal;text-align:left;max-width:380px">${esc(c.body || '')}</td><td>${statusChip(c.status)}</td>
+    ${(camps || []).map(c => `<tr><td>${new Date(c.created_at).toLocaleDateString('en-AU')}</td><td>${esc(c.name)}${c.starts_on ? `<div class="mu" style="font-size:12px">goes out ${fmtD(c.starts_on)}${c.program_id ? ' · yearly' : ''}</div>` : ''}</td><td style="white-space:normal;text-align:left;max-width:380px">${esc(c.body || '')}</td><td>${statusChip(c.status)}</td>
       <td>${c.status === 'draft' ? `<button class="btn" style="padding:2px 8px" data-ok="${c.id}">Approve and send</button> ` : ''}${['draft', 'approved'].includes(c.status) ? `<button class="btn ghost" style="padding:2px 8px" data-x="${c.id}">Cancel</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="mu">None yet</td></tr>'}</table></div></div>`;
   const filt = () => ({ stores: [...el.querySelectorAll('.cSt:checked')].map(x => x.value), tiers: [...el.querySelectorAll('.cTi:checked')].map(x => x.value), quadrants: [...el.querySelectorAll('.cQu:checked')].map(x => x.value), max_days: +$('#cMax').value || 365, ...($('#cLim').value ? { limit: +$('#cLim').value } : {}), ...($('#cAvgMax').value ? { max_avg_ticket: +$('#cAvgMax').value } : {}), ...($('#cAvgMin').value ? { min_avg_ticket: +$('#cAvgMin').value } : {}), ...svcFilt() });
   const pick = id => [...$('#' + id).selectedOptions].map(o => o.value);
@@ -270,14 +270,15 @@ async function mkSettings(el) {
     <div class="row"><div><label>Send from</label><input id="sStart" value="${esc((s.quiet_start || '09:00').slice(0, 5))}" style="width:80px"></div><div><label>until</label><input id="sEnd" value="${esc((s.quiet_end || '19:00').slice(0, 5))}" style="width:80px"></div>
       <div><label>Marketing texts per customer per month</label><input id="sCap" type="number" value="${s.marketing_cap_per_month ?? 2}" style="width:80px"></div><div><label>Held back to measure (%)</label><input id="sCtl" type="number" value="${s.control_pct ?? 10}" style="width:80px"></div>
       <div><label>Referral credit each way ($)</label><input id="sRef" type="number" value="${s.referral_credit ?? 75}" style="width:80px"></div>
-      <div><label>Days before the same service can be offered again</label><input id="sRep" type="number" value="${s.service_repeat_days ?? 350}" style="width:80px"></div></div>
+      <div><label>Days before the same service can be offered again</label><input id="sRep" type="number" value="${s.service_repeat_days ?? 350}" style="width:80px"></div>
+      <div><label>Days between the six offer waves (0 = all at once)</label><input id="sWave" type="number" min="0" max="14" value="${s.offer_wave_days ?? 1}" style="width:80px"></div></div>
     <p class="note">Never on Sundays. ${money(s.cost_per_sms, 3)} per SMS part.</p>
     <div class="row"><button class="btn" id="sSave">Save</button><span id="sMsg" class="note"></span></div></div>`;
   $('#sMode').value = s.mode || 'off';
   $('#sSave').onclick = async () => {
     const mode = $('#sMode').value;
     if (mode === 'live' && s.mode !== 'live' && !confirm('Turn on live sending? Everything queued and due will start going to customers within 5 minutes (sending hours only).')) return;
-    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, service_repeat_days: +$('#sRep').value || 350, updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
+    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, service_repeat_days: +$('#sRep').value || 350, offer_wave_days: Math.max(0, Math.min(14, +$('#sWave').value || 0)), updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
     $('#sMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.'; if (!error) marketingView('settings');
   };
 }
@@ -389,4 +390,76 @@ async function mkReport(el, week) {
   $('#mrT').onclick = async () => { $('#mrM').textContent = 'Sending…';
     const { data: t, error: e } = await sb.functions.invoke('store-reports', { body: { mode: 'test', kind: 'marketing', org_id: S.org.id, week } });
     $('#mrM').innerHTML = e || t?.error ? `<span class="err">${esc(t?.error || e.message)}</span>` : `<span class="up">Sent to ${esc(t.to.join(', '))}.</span>`; };
+}
+
+/* ---------- yearly campaigns and service reminders ---------- */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+async function mkPrograms(el, openId) {
+  const { data: progs } = await sb.from('marketing_programs').select('*').eq('org_id', S.org.id).order('kind').order('name');
+  const row = p => `<tr><td><b>${esc(p.name)}</b><div class="mu" style="font-size:12px">${p.kind === 'yearly'
+      ? `every ${p.start_day} ${MONTHS[p.start_month - 1]}, runs ${p.run_days} days, draft ${p.prepare_days} days ahead`
+      : `${p.after_days} days after their last ${esc(SVC_GROUPS[p.service_grp] || p.service_grp)}${p.months?.length ? ', only in ' + p.months.map(x => MONTHS[x - 1]).join(' ') : ''}`}</div></td>
+    <td style="white-space:normal;max-width:420px">${esc(p.body)}${p.note ? `<div class="mu" style="font-size:12px">${esc(p.note)}</div>` : ''}</td>
+    <td><label style="margin:0"><input type="checkbox" data-on="${p.id}" ${p.enabled ? 'checked' : ''}> ${p.enabled ? 'On' : 'Off'}</label></td>
+    <td style="white-space:nowrap"><button class="btn ghost" data-ed="${p.id}">Edit</button> <button class="btn ghost" data-pv="${p.id}">Check</button>${p.kind === 'yearly' ? ` <button class="btn ghost" data-now="${p.id}">Prepare now</button>` : ''}</td></tr>
+    <tr><td colspan="4" id="pd-${p.id}" class="note" style="padding-top:0"></td></tr>`;
+  el.innerHTML = `<div class="card"><h2>Yearly campaigns <small>same dates every year; a draft is made ahead for you to approve</small></h2>
+    <div class="scroll"><table><tr><th>Campaign</th><th>Message</th><th>On</th><th></th></tr>${(progs || []).filter(p => p.kind === 'yearly').map(row).join('') || '<tr><td colspan="4" class="mu">None yet</td></tr>'}</table></div>
+    <p class="note">When it's switched on, Hangr Ops builds this year's draft the set number of days before the start date and it waits under One-off campaigns for you to approve. Nothing goes until you do, and it goes out on its start date. {ends} becomes the end date.</p></div>
+  <div class="card"><h2>Service reminders <small>an automated flow off each customer's own service history</small></h2>
+    <div class="scroll"><table><tr><th>Reminder</th><th>Message</th><th>On</th><th></th></tr>${(progs || []).filter(p => p.kind === 'reminder').map(row).join('') || '<tr><td colspan="4" class="mu">None yet</td></tr>'}</table></div>
+    <p class="note">Checked every morning with the other flows. A customer gets it once their last use of that service is the set number of days ago (and only in the chosen months), never twice within the repeat window. Switching it on is your approval of the wording. Reminders need the service history from Huward's Sales Incoming by service and order uploads, so they fill out as the backfill lands.</p></div>
+  <div class="card"><h2>Add one</h2><div class="row"><button class="btn ghost" id="pAddY">New yearly campaign</button><button class="btn ghost" id="pAddR">New service reminder</button></div></div>
+  <div class="card" id="pEdit" hidden></div>
+  <p class="note">All of these use the same rules as everything else: 10% held back to measure, at most ${S.sms?.marketing_cap_per_month ?? 2} marketing texts a customer a month, ${S.sms?.flow_pause_days ?? 14} days clear of the six-offer waves, account customers, opt-outs and do-not-contact left out. Results show under Marketing › Report.</p>`;
+  const msg = (id, t) => el.querySelector('#pd-' + id).innerHTML = t;
+  el.querySelectorAll('[data-on]').forEach(x => x.onchange = async () => {
+    if (x.checked && !confirm('Switch this on? That approves its wording to go to customers once Sending is live.')) { x.checked = false; return; }
+    const { error } = await sb.rpc('program_switch', { p_program: x.dataset.on, p_on: x.checked }); if (error) alert(error.message); mkPrograms(el); });
+  el.querySelectorAll('[data-pv]').forEach(b => b.onclick = async () => { msg(b.dataset.pv, 'Checking…');
+    const { data: d, error } = await sb.rpc('program_preview', { p_program: b.dataset.pv });
+    msg(b.dataset.pv, error ? `<span class="err">${esc(error.message)}</span>` : d.starts_on ? `Next start ${fmtD(d.starts_on)}: about ${num(d.audience)} customers, about ${money(d.est_cost)} of SMS after the hold-back.`
+      : `Due today: ${num(d.due_now)} · in the next 30 days: ${num(d.next_30_days)} · customers with this service in their history: ${num(d.with_history)} (history to ${fmtD(d.history_to)}).`); });
+  el.querySelectorAll('[data-now]').forEach(b => b.onclick = async () => {
+    if (!confirm("Make this year's draft now? It will wait under One-off campaigns for approval.")) return;
+    msg(b.dataset.now, 'Building…');
+    const { data: d, error } = await sb.rpc('program_prepare_now', { p_program: b.dataset.now });
+    msg(b.dataset.now, error ? `<span class="err">${esc(error.message)}</span>` : d.already ? 'This year\'s draft already exists: see One-off campaigns.' : `Draft made: ${num(d.messages)} messages for ${fmtD(d.starts_on)}. Approve it under One-off campaigns.`); });
+  const edit = p => {
+    const e = $('#pEdit'); e.hidden = false; const y = p.kind === 'yearly';
+    e.innerHTML = `<h2>${p.id ? 'Edit' : 'New'} ${y ? 'yearly campaign' : 'service reminder'}</h2>
+      <label>Name</label><input id="pN" value="${esc(p.name || '')}" style="width:100%">
+      <label>Message</label><textarea id="pB" rows="3" style="width:100%">${esc(p.body || '')}</textarea>
+      <p class="note">Use {first_name}, {store}${y ? ', {ends}' : ''}. Opt-out wording is added automatically. <span id="pLen"></span></p>
+      ${y ? `<div class="row"><div><label>Starts (day / month)</label><input id="pD" type="number" min="1" max="28" value="${p.start_day || 1}" style="width:60px">
+          <select id="pM">${MONTHS.map((n, i) => `<option value="${i + 1}" ${i + 1 === p.start_month ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+          <div><label>Runs (days)</label><input id="pRun" type="number" value="${p.run_days || 21}" style="width:70px"></div>
+          <div><label>Draft made (days ahead)</label><input id="pPrep" type="number" value="${p.prepare_days || 14}" style="width:70px"></div>
+          <div><label>Customers who ordered in the last (days)</label><input id="pMax" type="number" value="${p.filters?.max_days ?? 730}" style="width:80px"></div></div>`
+        : `<div class="row"><div><label>Watches</label><select id="pG">${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}" ${g === p.service_grp ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+          <div><label>Days after last use</label><input id="pA" type="number" value="${p.after_days || 330}" style="width:70px"></div>
+          <div><label>Not again within (days)</label><input id="pRp" type="number" value="${p.repeat_days || 300}" style="width:70px"></div>
+          <div><label>Only in these months (blank = any)</label>${MONTHS.map((n, i) => `<label style="display:inline-block;margin-right:6px;color:var(--ink)"><input type="checkbox" class="pMo" value="${i + 1}" ${(p.months || []).includes(i + 1) ? 'checked' : ''}> ${n}</label>`).join('')}</div></div>`}
+      <div class="row"><div><label>Promotes (for results and the repeat rule)</label><select id="pT"><option value="">no one service</option>${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}" ${g === p.service_tag ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+        <div><label>POS discount staff use for it</label><input id="pPos" value="${esc(p.pos_discount || '')}" placeholder="e.g. Offer – Curtains 15%"></div></div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="pSave">Save</button><button class="btn ghost" id="pCancel">Close</button>${p.id ? '<button class="btn ghost" id="pDel" style="margin-left:auto">Delete</button>' : ''}<span id="pMsg" class="note"></span></div>
+      ${p.enabled ? '<p class="note">Saving switches it off again so you can re-approve the new wording.</p>' : ''}`;
+    const len = () => { const n = $('#pB').value.length + 30; $('#pLen').textContent = `About ${n} characters with the opt-out: ${n <= 160 ? '1 text' : Math.ceil(n / 153) + ' texts each (costs more)'}.`; };
+    $('#pB').oninput = len; len();
+    $('#pCancel').onclick = () => { e.hidden = true; };
+    if ($('#pDel')) $('#pDel').onclick = async () => { if (!confirm('Delete this?')) return; await sb.from('marketing_programs').delete().eq('id', p.id); mkPrograms(el); };
+    $('#pSave').onclick = async () => {
+      const rec = { org_id: S.org.id, kind: p.kind, name: $('#pN').value.trim(), body: $('#pB').value.trim(), service_tag: $('#pT').value || null, pos_discount: $('#pPos').value.trim() || null,
+        enabled: false, approved_by: null, approved_at: null, updated_at: new Date().toISOString() };
+      if (!rec.name || !rec.body) { $('#pMsg').innerHTML = '<span class="err">Give it a name and a message.</span>'; return; }
+      if (y) Object.assign(rec, { start_day: +$('#pD').value || 1, start_month: +$('#pM').value, run_days: +$('#pRun').value || 21, prepare_days: +$('#pPrep').value || 14, filters: { ...(p.filters || {}), max_days: +$('#pMax').value || 730 } });
+      else Object.assign(rec, { service_grp: $('#pG').value, after_days: +$('#pA').value || 330, repeat_days: +$('#pRp').value || 300, months: [...el.querySelectorAll('.pMo:checked')].map(x => +x.value) });
+      const { error } = p.id ? await sb.from('marketing_programs').update(rec).eq('id', p.id) : await sb.from('marketing_programs').insert(rec);
+      if (error) $('#pMsg').innerHTML = `<span class="err">${esc(error.message)}</span>`; else mkPrograms(el);
+    };
+    e.scrollIntoView({ behavior: 'smooth' });
+  };
+  el.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => edit(progs.find(p => p.id === b.dataset.ed)));
+  $('#pAddY').onclick = () => edit({ kind: 'yearly', filters: { max_days: 730 } });
+  $('#pAddR').onclick = () => edit({ kind: 'reminder', filters: {} });
 }
