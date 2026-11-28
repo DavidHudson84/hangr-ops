@@ -166,3 +166,16 @@ DRYZ". Services this week still include DRYZ's lines until it stops trading. Res
 send-only, hangr.au only) created 28 Nov 2026 and stored in `app.report_settings`; six test emails sent to David that day.
 
 **Address:** https://ops.hangr.au since 28 Nov 2026 (CNAME file + GoDaddy CNAME `ops`). Logins are per address, so everyone signs in again once. Scripts are plain globals across app.js, marketing.js, labour.js, roles.js, accounts.js and growth.js, so a top-level const can clash between files (DOW did, 28 Nov): before pushing, concatenate all six and run `node --check`.
+
+## Logins, password reset and two-factor (28 Nov 2026, migrations 0016-0017)
+
+Invites only: Admin > People (Edge Function `admin-users`, verify_jwt off, checks the caller is an org admin with
+two-factor) invites by email (Supabase `inviteUserByEmail`, link to https://ops.hangr.au/?set=1), resends, sends
+password resets, changes role/store, removes access; the owner can reset someone's two-factor. Sign-in screen has
+"Forgot password?"; `?set=1` links land on Set your password. Open sign-up is removed from the screen (David turns it
+off in Supabase too). Two-factor (TOTP authenticator app) is required: `app.mfa_ok()` (session aal2) is inside
+is_platform_admin, is_org_admin, can_see_org, can_see_store, can_upload and visible_store_ids, so a password alone
+reads nothing (checked: 0 customers at aal1, 28,002 at aal2). Emergency switch, database only:
+`update app.security_settings set require_mfa = false`. Loader-key scripts and pg_cron jobs are unaffected.
+Auth emails go through Resend SMTP (key "hangr-ops sign-in emails", send-only, hangr.au) set in the Supabase
+dashboard; steps in AIOS `outputs/hangr-ops/supabase-sign-in-setup.md`.
