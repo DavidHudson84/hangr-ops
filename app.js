@@ -389,9 +389,11 @@ async function storeView(code, weekSel) {
     sb.from('commentary').select('*').eq('store_id', store.id).eq('week_end', wk).maybeSingle(),
     isAdmin() ? sb.from('v_labour_week').select('week_end,cost').eq('store_id', store.id).neq('section', 'alterations').gte('week_end', addDays(wk, -77)).lte('week_end', wk) : Promise.resolve({ data: [] })]);
   const labW = new Map(); for (const r of lab.data || []) labW.set(r.week_end, (labW.get(r.week_end) || 0) + +(r.cost || 0));
-  const wageCur = labW.has(wk) && c.retail ? labW.get(wk) / (c.retail / 1.1) : null; // wage % on ex-GST sales
+  const kidIds = S.stores.filter(x => x.labour_parent_id === store.id).map(x => x.id);
+  const kidSer = kidIds.length ? weekMap(rows, kidIds) : [], kidR = w => (kidSer.find(k => k.week_end === w)?.retail || 0);
+  const wageCur = labW.has(wk) && c.retail ? labW.get(wk) / ((c.retail + kidR(wk)) / 1.1) : null; // wage % on ex-GST sales
   const wPrior = ser.filter(w => w.week_end <= wk && labW.has(w.week_end) && w.retail).slice(-12);
-  const wage12 = wPrior.length ? wPrior.reduce((a, w) => a + labW.get(w.week_end), 0) / (wPrior.reduce((a, w) => a + w.retail, 0) / 1.1) : null;
+  const wage12 = wPrior.length ? wPrior.reduce((a, w) => a + labW.get(w.week_end), 0) / (wPrior.reduce((a, w) => a + w.retail + kidR(w.week_end), 0) / 1.1) : null;
   // services: this week vs prior 12-week average
   const sv = new Map();
   for (const r of svc.data || []) {

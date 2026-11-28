@@ -120,8 +120,9 @@ async function lbStores(el, wkSel) {
   const row = (s, w) => {
     const lab = d.lw.filter(r => r.week_end === w && r.store_id === s.id && r.section !== 'alterations');
     const c = lab.reduce((a, r) => a + +(r.cost || 0), 0), h = lab.reduce((a, r) => a + +r.hours, 0), sal = lab.reduce((a, r) => a + +(r.salaried_cost || 0), 0);
-    const sales = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross / GST, 0);
-    const orders = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.orders, 0);
+    const ids = [s.id, ...S.stores.filter(x => x.labour_parent_id === s.id).map(x => x.id)];
+    const sales = d.sw.filter(r => r.week_end === w && ids.includes(r.store_id) && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross / GST, 0);
+    const orders = d.sw.filter(r => r.week_end === w && ids.includes(r.store_id) && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.orders, 0);
     return { c, h, sal, sales, orders };
   };
   const salesWeeks = [...new Set(d.sw.map(r => r.week_end))].sort();
@@ -129,11 +130,11 @@ async function lbStores(el, wkSel) {
   <div class="row" style="margin-bottom:12px"><span class="sp"></span>${lbWeekPicker(weeksList, wk, '#/labour/stores/')}</div>
   <div class="card"><h2>Stores <small>week ending ${fmtD(wk)}: counter and store delivery labour against the store's retail sales (repairs are on the Repairs tab)</small></h2><div class="scroll"><table>
     <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales ex GST</th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
-    ${stores.map(s => { const r = row(s, wk);
+    ${stores.map(s => { const r = row(s, wk), kids = S.stores.filter(x => x.labour_parent_id === s.id).map(x => x.name);
       const rost = (roster || []).filter(x => locStore[x.eh_location_id] === s.id).reduce((a, x) => a + +x.hours, 0);
       const pw = salesWeeks.filter(w => w <= wk).slice(-12).map(w => row(s, w)).filter(x => x.sales);
       const avg = pw.length ? pw.reduce((a, x) => a + x.c, 0) / pw.reduce((a, x) => a + x.sales, 0) : null;
-      return `<tr><td>${esc(s.name)}</td><td>${num(r.h)}</td><td>${rost ? num(rost) : '–'}</td><td>${money(r.c)}</td><td class="mu">${r.sal ? money(r.sal) : '–'}</td><td>${r.sales ? money(r.sales) : '–'}</td><td>${r.sales ? wTxt(wpct(r.c, r.sales), .25, .32) : '–'}</td><td>${wTxt(avg, .25, .32)}</td><td>${r.sales && r.h ? (r.orders / r.h).toFixed(1) : '–'}</td></tr>`; }).join('')}
+      return `<tr><td>${esc(s.name)}${kids.length ? `<div class="note">incl. ${esc(kids.join(', '))} sales and driver</div>` : ''}</td><td>${num(r.h)}</td><td>${rost ? num(rost) : '–'}</td><td>${money(r.c)}</td><td class="mu">${r.sal ? money(r.sal) : '–'}</td><td>${r.sales ? money(r.sales) : '–'}</td><td>${r.sales ? wTxt(wpct(r.c, r.sales), .25, .32) : '–'}</td><td>${wTxt(avg, .25, .32)}</td><td>${r.sales && r.h ? (r.orders / r.h).toFixed(1) : '–'}</td></tr>`; }).join('')}
   </table></div>
   <p class="note">Rostered hours come from the Employment Hero store rosters. Salaried staff (Rhonda at Albert Park) are spread evenly over weekdays, so compare stores with and without that column. Retail sales are blank for weeks after the last Sales Incoming upload (${fmtD(salesWeeks[salesWeeks.length - 1])}).</p></div>`;
 }
@@ -141,7 +142,8 @@ async function lbStores(el, wkSel) {
 /* ---------- repairs: the whole group's repair sales against the repairers' wages ---------- */
 async function lbRepairs(el) {
   const d = await lbData();
-  const sv = r => d.svcSec[r.service] === 'alterations';
+  const inHouse = new Set(S.stores.filter(s => s.repairs_in_house !== false).map(s => s.id));
+  const sv = r => d.svcSec[r.service] === 'alterations' && inHouse.has(r.store_id);
   const salesWeeks = [...new Set(d.sw.map(r => r.week_end))].sort();
   const weeksList = [...new Set(d.lw.map(r => r.week_end))].filter(w => w <= lastSunday()).sort();
   const wkRow = w => {
@@ -174,7 +176,7 @@ async function lbRepairs(el) {
     <tr><th>Store taking the work in</th><th>Repair sales ex GST</th><th>Pieces</th><th>Share</th></tr>
     ${Object.entries(byStore).sort((a, b) => b[1].s - a[1].s).map(([k, v]) => `<tr><td>${esc(stName(k))}</td><td>${money(v.s / n)}</td><td>${num(v.p / n)}</td><td>${S12.s ? (v.s / S12.s * 100).toFixed(0) + '%' : ''}</td></tr>`).join('')}
   </table></div>
-  <p class="note">Repair sales are the POS services ${esc(svcNames)} at every store, ex GST. Shoe Repairs is left out because a cobbler does that work. Repair wages are the Alterations section: Seddon's repairers, less the counter time of anyone who also serves (Surin: the first 2 hours of each day she works count as Seddon counter).</p></div>`
+  <p class="note">Repair sales are the POS services ${esc(svcNames)} at every store, ex GST. Shoe Repairs is left out because a cobbler does that work, and so is ${esc(S.stores.filter(s => s.repairs_in_house === false).map(s => s.name).join(', ') || 'no store')}, whose repairs were never ours. Repair wages are the Alterations section: Seddon's repairers, less the counter time of anyone who also serves (Surin: the first 2 hours of each day she works count as Seddon counter).</p></div>`
   : '<div class="card">No repair sales loaded yet.</div>';
 }
 
