@@ -1,11 +1,12 @@
 /* Hangr Ops: Labour (module B2, admin only).
    Plant: labour by work stream against the sales and pieces that stream produced.
    Stores: counter labour against retail sales, rostered vs worked.
+   Repairs: every store's repair sales against the repairers' wages (Seddon does the group's repairs).
    Dr Drapes: weekly wage % (Drapr value of work finished, Xero billed for rolling figures).
    Sections: home section per person, per-shift moves, location mapping sign-off.
    Labour comes from Employment Hero (read-only, daily pull); nothing here writes back to it. */
 
-const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['roster', 'Roster plan'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections'], ['org', 'Org chart']];
+const LB_TABS = [['plant', 'Plant'], ['stores', 'Stores'], ['repairs', 'Repairs'], ['roster', 'Roster plan'], ['drdrapes', 'Dr Drapes'], ['sections', 'Sections'], ['org', 'Org chart']];
 const SECTION_NAMES = {
   shirts: 'Shirts', pressing: 'Pressing / finishing', dc_production: 'Dry cleaning production', wash_fold: 'Wash & fold / DRYZ',
   restoration: 'Restoration', plant_shared: 'Plant shared (front desk, scanning, juniors, management)', delivery: 'Delivery / drivers',
@@ -44,7 +45,7 @@ async function labourView(tab = 'plant', arg) {
     <span class="note">Employment Hero, pulled daily at 6:15am. Cost = wages + super. WorkCover not included.</span></div>
   <div class="row" style="margin-bottom:12px">${LB_TABS.map(([k, t]) => `<a class="btn ${k === tab || (k === 'org' && tab === 'role') ? '' : 'ghost'}" style="padding:5px 10px" href="#/labour/${k}">${t}</a>`).join('')}</div>
   <div id="lb"><p class="note">Loading…</p></div>`;
-  const fn = { plant: lbPlant, stores: lbStores, roster: lbRoster, drdrapes: lbDrd, sections: lbSections, org: lbOrg, role: lbRole }[tab] || lbPlant;
+  const fn = { plant: lbPlant, stores: lbStores, repairs: lbRepairs, roster: lbRoster, drdrapes: lbDrd, sections: lbSections, org: lbOrg, role: lbRole }[tab] || lbPlant;
   await fn($('#lb'), arg);
 }
 
@@ -117,7 +118,7 @@ async function lbStores(el, wkSel) {
   const { data: locs } = await sb.from('labour_locations').select('eh_location_id,store_id').eq('org_id', S.org.id);
   const locStore = Object.fromEntries((locs || []).map(l => [l.eh_location_id, l.store_id]));
   const row = (s, w) => {
-    const lab = d.lw.filter(r => r.week_end === w && r.store_id === s.id);
+    const lab = d.lw.filter(r => r.week_end === w && r.store_id === s.id && r.section !== 'alterations');
     const c = lab.reduce((a, r) => a + +(r.cost || 0), 0), h = lab.reduce((a, r) => a + +r.hours, 0), sal = lab.reduce((a, r) => a + +(r.salaried_cost || 0), 0);
     const sales = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross / GST, 0);
     const orders = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.orders, 0);
@@ -126,7 +127,7 @@ async function lbStores(el, wkSel) {
   const salesWeeks = [...new Set(d.sw.map(r => r.week_end))].sort();
   el.innerHTML = `
   <div class="row" style="margin-bottom:12px"><span class="sp"></span>${lbWeekPicker(weeksList, wk, '#/labour/stores/')}</div>
-  <div class="card"><h2>Stores <small>week ending ${fmtD(wk)}: counter, alterations and store delivery labour against the store's retail sales</small></h2><div class="scroll"><table>
+  <div class="card"><h2>Stores <small>week ending ${fmtD(wk)}: counter and store delivery labour against the store's retail sales (repairs are on the Repairs tab)</small></h2><div class="scroll"><table>
     <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales ex GST</th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
     ${stores.map(s => { const r = row(s, wk);
       const rost = (roster || []).filter(x => locStore[x.eh_location_id] === s.id).reduce((a, x) => a + +x.hours, 0);
@@ -135,6 +136,46 @@ async function lbStores(el, wkSel) {
       return `<tr><td>${esc(s.name)}</td><td>${num(r.h)}</td><td>${rost ? num(rost) : '–'}</td><td>${money(r.c)}</td><td class="mu">${r.sal ? money(r.sal) : '–'}</td><td>${r.sales ? money(r.sales) : '–'}</td><td>${r.sales ? wTxt(wpct(r.c, r.sales), .25, .32) : '–'}</td><td>${wTxt(avg, .25, .32)}</td><td>${r.sales && r.h ? (r.orders / r.h).toFixed(1) : '–'}</td></tr>`; }).join('')}
   </table></div>
   <p class="note">Rostered hours come from the Employment Hero store rosters. Salaried staff (Rhonda at Albert Park) are spread evenly over weekdays, so compare stores with and without that column. Retail sales are blank for weeks after the last Sales Incoming upload (${fmtD(salesWeeks[salesWeeks.length - 1])}).</p></div>`;
+}
+
+/* ---------- repairs: the whole group's repair sales against the repairers' wages ---------- */
+async function lbRepairs(el) {
+  const d = await lbData();
+  const sv = r => d.svcSec[r.service] === 'alterations';
+  const salesWeeks = [...new Set(d.sw.map(r => r.week_end))].sort();
+  const weeksList = [...new Set(d.lw.map(r => r.week_end))].filter(w => w <= lastSunday()).sort();
+  const wkRow = w => {
+    const lab = d.lw.filter(r => r.week_end === w && r.section === 'alterations');
+    const s = d.sw.filter(r => r.week_end === w && sv(r));
+    return { w, h: lab.reduce((a, r) => a + +r.hours, 0), c: lab.reduce((a, r) => a + +(r.cost || 0), 0),
+      sales: s.reduce((a, r) => a + +r.sales_gross / GST, 0), pcs: s.reduce((a, r) => a + +r.pieces, 0), has: salesWeeks.includes(w) };
+  };
+  const rows = weeksList.slice(-16).map(wkRow);
+  const last12 = rows.filter(r => r.has).slice(-12);
+  const S12 = last12.reduce((a, r) => ({ h: a.h + r.h, c: a.c + r.c, s: a.s + r.sales, p: a.p + r.pcs }), { h: 0, c: 0, s: 0, p: 0 }), n = last12.length || 1;
+  const from = last12[0]?.w, to = last12[last12.length - 1]?.w;
+  const byStore = {};
+  for (const r of d.sw) if (sv(r) && from && r.week_end >= from && r.week_end <= to) { const k = r.store_id; byStore[k] = byStore[k] || { s: 0, p: 0 }; byStore[k].s += +r.sales_gross / GST; byStore[k].p += +r.pieces; }
+  const stName = id => S.stores.find(s => s.id === id)?.name || 'Other';
+  const svcNames = S.services.filter(s => s.section === 'alterations').map(s => s.name).join(', ');
+  el.innerHTML = last12.length ? `
+  <div class="tiles">
+    <div class="tile"><div class="l">Repair sales a week</div><div class="v">${money(S12.s / n)}</div><div class="d mu">ex GST, every store, ${num(S12.p / n)} pieces</div></div>
+    <div class="tile"><div class="l">Repair wages a week</div><div class="v">${money(S12.c / n)}</div><div class="d mu">${num(S12.h / n)} hours</div></div>
+    <div class="tile"><div class="l">Repairs wage %</div><div class="v">${wTxt(wpct(S12.c, S12.s), .35, .45)}</div><div class="d mu">12 weeks to ${fmtD(to)}</div></div>
+    <div class="tile"><div class="l">Sales per repair hour</div><div class="v">${S12.h ? money(S12.s / S12.h) : '–'}</div><div class="d mu">${S12.h ? (S12.p / S12.h).toFixed(1) + ' pieces an hour' : ''}</div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><h2>Week by week</h2><div class="scroll"><table>
+    <tr><th>Week ending</th><th>Repair sales ex GST</th><th>Pieces</th><th>Repair hours</th><th>Repair wages</th><th>Wage %</th><th>Sales / hour</th></tr>
+    ${rows.slice().reverse().map(r => `<tr><td>${fmtD(r.w)}</td><td>${r.has ? money(r.sales) : '<span class="mu">not loaded</span>'}</td><td>${r.has ? num(r.pcs) : ''}</td><td>${num(r.h)}</td><td>${money(r.c)}</td>
+      <td>${r.has ? wTxt(wpct(r.c, r.sales), .35, .45) : '–'}</td><td>${r.has && r.h ? money(r.sales / r.h) : '–'}</td></tr>`).join('')}
+  </table></div></div>
+  <div class="card"><h2>Where the repairs come from <small>12 weeks to ${fmtD(to)}, a week on average</small></h2><div class="scroll"><table>
+    <tr><th>Store taking the work in</th><th>Repair sales ex GST</th><th>Pieces</th><th>Share</th></tr>
+    ${Object.entries(byStore).sort((a, b) => b[1].s - a[1].s).map(([k, v]) => `<tr><td>${esc(stName(k))}</td><td>${money(v.s / n)}</td><td>${num(v.p / n)}</td><td>${S12.s ? (v.s / S12.s * 100).toFixed(0) + '%' : ''}</td></tr>`).join('')}
+  </table></div>
+  <p class="note">Repair sales are the POS services ${esc(svcNames)} at every store, ex GST. Shoe Repairs is left out because a cobbler does that work. Repair wages are the Alterations section: Seddon's repairers, less the counter time of anyone who also serves (Surin: the first 2 hours of each day she works count as Seddon counter).</p></div>`
+  : '<div class="card">No repair sales loaded yet.</div>';
 }
 
 /* ---------- Dr Drapes ---------- */

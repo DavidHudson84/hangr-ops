@@ -387,7 +387,7 @@ async function storeView(code, weekSel) {
     sb.from('v_customers').select('full_name,mobile,first_order,lifetime_spend,order_count').eq('store_id', store.id).eq('is_commercial', false).not('first_order', 'is', null).gt('order_count', 0).order('first_order', { ascending: false }).limit(15),
     sb.from('v_customers').select('full_name,mobile,lifetime_spend,last_order,days_since,tier,order_count').eq('store_id', store.id).eq('is_commercial', false).gte('lifetime_spend', 500).gte('days_since', 45).lte('days_since', 180).order('lifetime_spend', { ascending: false }).limit(15),
     sb.from('commentary').select('*').eq('store_id', store.id).eq('week_end', wk).maybeSingle(),
-    isAdmin() ? sb.from('v_labour_week').select('week_end,cost').eq('store_id', store.id).gte('week_end', addDays(wk, -77)).lte('week_end', wk) : Promise.resolve({ data: [] })]);
+    isAdmin() ? sb.from('v_labour_week').select('week_end,cost').eq('store_id', store.id).neq('section', 'alterations').gte('week_end', addDays(wk, -77)).lte('week_end', wk) : Promise.resolve({ data: [] })]);
   const labW = new Map(); for (const r of lab.data || []) labW.set(r.week_end, (labW.get(r.week_end) || 0) + +(r.cost || 0));
   const wageCur = labW.has(wk) && c.retail ? labW.get(wk) / (c.retail / 1.1) : null; // wage % on ex-GST sales
   const wPrior = ser.filter(w => w.week_end <= wk && labW.has(w.week_end) && w.retail).slice(-12);
