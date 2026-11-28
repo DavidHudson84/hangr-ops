@@ -159,3 +159,8 @@ Edge Function `store-reports` (verify_jwt off; modes cron/render need `app.repor
 preview/test need an admin login). pg_cron `hangr-store-reports` every 15 min. Sent through Resend from
 reports@hangr.au (domain verified), reply-to David; the key lives in `app.report_settings.resend_key`, never the repo.
 All six schedules start OFF with only David as recipient.
+**Exclusions (migrations 0013-0015):** `report_exclusions` takes an account out of a store's report in every week so
+comparisons are like for like; DRYZ at Butler (ended Nov 2026) is the first. `app.excluded_sales(store, week)` uses
+order_lines (Sales Incoming basis) where the week is loaded, else Customer Orders. The store shows as "The Butler excl.
+DRYZ". Services this week still include DRYZ's lines until it stops trading. Resend key ("hangr-ops store reports",
+send-only, hangr.au only) created 28 Nov 2026 and stored in `app.report_settings`; six test emails sent to David that day.
