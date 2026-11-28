@@ -111,6 +111,7 @@ async function lbPlant(el, wkSel) {
 /* ---------- stores ---------- */
 async function lbStores(el, wkSel) {
   const d = await lbData();
+  const noLab = new Set(S.services.filter(x => x.labour_exclude).map(x => x.name));
   const weeksList = [...new Set(d.lw.map(r => r.week_end))].filter(w => w <= lastSunday()).sort();
   const wk = wkSel || weeksList[weeksList.length - 1];
   const stores = S.stores.filter(s => d.lw.some(r => r.store_id === s.id));
@@ -121,7 +122,7 @@ async function lbStores(el, wkSel) {
     const lab = d.lw.filter(r => r.week_end === w && r.store_id === s.id && r.section !== 'alterations');
     const c = lab.reduce((a, r) => a + +(r.cost || 0), 0), h = lab.reduce((a, r) => a + +r.hours, 0), sal = lab.reduce((a, r) => a + +(r.salaried_cost || 0), 0);
     const ids = [s.id, ...S.stores.filter(x => x.labour_parent_id === s.id).map(x => x.id)];
-    const sales = d.sw.filter(r => r.week_end === w && ids.includes(r.store_id) && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross / GST, 0);
+    const sales = d.sw.filter(r => r.week_end === w && ids.includes(r.store_id) && d.svcCh[r.service] === 'retail' && !noLab.has(r.service)).reduce((a, r) => a + +r.sales_gross / GST, 0);
     const orders = d.sw.filter(r => r.week_end === w && ids.includes(r.store_id) && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.orders, 0);
     return { c, h, sal, sales, orders };
   };
@@ -129,7 +130,7 @@ async function lbStores(el, wkSel) {
   el.innerHTML = `
   <div class="row" style="margin-bottom:12px"><span class="sp"></span>${lbWeekPicker(weeksList, wk, '#/labour/stores/')}</div>
   <div class="card"><h2>Stores <small>week ending ${fmtD(wk)}: counter and store delivery labour against the store's retail sales (repairs are on the Repairs tab)</small></h2><div class="scroll"><table>
-    <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales ex GST</th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
+    <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales ex GST <span class="note">excl. shoe repairs</span></th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
     ${stores.map(s => { const r = row(s, wk), kids = S.stores.filter(x => x.labour_parent_id === s.id).map(x => x.name);
       const rost = (roster || []).filter(x => locStore[x.eh_location_id] === s.id).reduce((a, x) => a + +x.hours, 0);
       const pw = salesWeeks.filter(w => w <= wk).slice(-12).map(w => row(s, w)).filter(x => x.sales);
