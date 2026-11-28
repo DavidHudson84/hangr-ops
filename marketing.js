@@ -45,9 +45,16 @@ async function mkOffers(el) {
         <span class="note">Anyone sent an offer for this service in the last ${S.sms?.service_repeat_days ?? 350} days is skipped.</span></div>
       ${['vip', 'casual', 'lapsed'].map(v => { const b = o.variants?.[v]?.body || ''; return `<label>${VAR_NAMES[v]} <span class="note" data-cnt="${o.slot}-${v}">${b.length + FOOT.length} chars · ${segs(b + FOOT)} SMS</span></label>
         <textarea data-var="${v}" style="min-height:48px">${esc(b)}</textarea>`; }).join('')}
+      <details style="margin-top:8px" ${o.variants_b && Object.values(o.variants_b).some(x => x?.body) ? 'open' : ''}><summary><b>A/B test: version B</b> <span class="note">${o.ab_label ? 'testing: ' + esc(o.ab_label) : 'optional: leave blank for no test'}</span></summary>
+        <p class="note">Write version B to change one thing only (e.g. *** emphasis, a $ amount instead of a %, no intro). Half of this offer's customers get A and half get B, picked at random, with the 10% hold-back as usual. Leave a tier blank and everyone in that tier gets A.</p>
+        <label>What B tests</label><input data-ablabel value="${esc(o.ab_label || '')}" placeholder="e.g. *** emphasis" style="width:260px">
+        ${['vip', 'casual', 'lapsed'].map(v => { const b = o.variants_b?.[v]?.body || ''; return `<label>${VAR_NAMES[v]}, version B <span class="note" data-cnt="${o.slot}-b${v}">${b ? `${b.length + FOOT.length} chars · ${segs(b + FOOT)} SMS` : ''}</span></label>
+          <textarea data-varb="${v}" style="min-height:44px" placeholder="blank = no test for this tier">${esc(b)}</textarea>`; }).join('')}
+      </details>
       <div class="row"><button class="btn ghost" data-save="${o.slot}">Save offer ${o.slot}</button><span id="os-${o.slot}" class="note"></span></div>
     </div>`).join('')}
-    <p class="note">Placeholders: {first_name}, {store}, {ends} (the end of the period). The opt-out line is added automatically. Changes apply to periods not yet approved.</p></div>
+    <p class="note">Placeholders: {first_name}, {store}, {ends} (the end of the period). The intro and opt-out line are added automatically. Changes apply to periods not yet approved.</p></div>
+  <div class="card" id="abRes"></div>
   <div class="card" id="ol-low"><h2>Low spenders <small>average ticket under $${S.sms?.low_spender_cutoff ?? 30}; every period, instead of the rotation</small></h2>
     <label>Message <span class="note" data-cnt="low-x">${(S.sms?.low_spender_body || '').length + FOOT.length} chars · ${segs((S.sms?.low_spender_body || '') + FOOT)} SMS</span></label>
     <textarea data-var="x" id="lowBody" style="min-height:48px">${esc(S.sms?.low_spender_body || '')}</textarea>
@@ -61,12 +68,17 @@ async function mkOffers(el) {
       <tr><td colspan="9" id="op-${c.id}" class="note" style="text-align:left;white-space:normal"></td></tr>`).join('')}
   </table></div><p class="note">The group columns show which offer number each group gets that period.</p></div>`;
   el.querySelectorAll('textarea[data-var]').forEach(t => t.oninput = () => { const id = t.closest('.card').id.slice(3); const n = el.querySelector(`[data-cnt="${id}-${t.dataset.var}"]`); n.textContent = `${t.value.length + FOOT.length} chars · ${segs(t.value + FOOT)} SMS`; });
+  el.querySelectorAll('textarea[data-varb]').forEach(t => t.oninput = () => { const id = t.closest('.card').id.slice(3); const n = el.querySelector(`[data-cnt="${id}-b${t.dataset.varb}"]`); n.textContent = t.value ? `${t.value.length + FOOT.length} chars · ${segs(t.value + FOOT)} SMS` : ''; });
   el.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
     const card = $('#ol-' + b.dataset.save), v = {};
     card.querySelectorAll('textarea[data-var]').forEach(t => v[t.dataset.var] = { body: t.value.trim() });
-    const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, service_group: card.querySelector('[data-group]').value || null, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
+    const vb = {}; card.querySelectorAll('textarea[data-varb]').forEach(t => { if (t.value.trim()) vb[t.dataset.varb] = { body: t.value.trim() }; });
+    const hasB = Object.keys(vb).length > 0, label = card.querySelector('[data-ablabel]').value.trim();
+    if (hasB && !label) { $('#os-' + b.dataset.save).innerHTML = '<span class="err">Say what version B tests, so the results make sense.</span>'; return; }
+    const { error } = await sb.from('offer_library').update({ name: card.querySelector('[data-name]').value.trim(), variants: v, variants_b: hasB ? vb : null, ab_label: hasB ? label : null, service_group: card.querySelector('[data-group]').value || null, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('slot', +b.dataset.save);
     $('#os-' + b.dataset.save).innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
   });
+  abResults($('#abRes'));
   $('#lowSave').onclick = async () => {
     const { error } = await sb.from('sms_settings').update({ low_spender_body: $('#lowBody').value.trim(), low_spender_cutoff: +$('#lowCut').value || 30 }).eq('org_id', S.org.id);
     $('#os-low').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.';
@@ -498,4 +510,26 @@ async function mkTest(el) {
     if (error) { $('#tMsg').innerHTML = `<span class="err">${esc(error.message)}</span>`; return; }
     $('#tMsg').innerHTML = `<span class="up">Queued to ${esc(data.to)}${data.in_hours ? ', arriving within 5 minutes' : ', and it goes at the start of the next sending window'}.</span> ${data.length} characters, ${data.texts} text${data.texts > 1 ? 's' : ''}:<div class="card" style="margin-top:6px;white-space:pre-wrap">${esc(data.body)}</div>`;
   };
+}
+
+/* ---------- A/B wording tests: version A against version B ---------- */
+async function abResults(el) {
+  const { data } = await sb.rpc('offer_ab_results', { p_org: S.org.id });
+  if (!data?.length) { el.innerHTML = '<h2>A/B wording tests</h2><p class="note">No tests sent yet. Add a version B to an offer above; results appear here once its cycle goes out.</p>'; return; }
+  const key = r => `${r.cycle}|${r.slot}`, groups = [...new Set(data.map(key))];
+  const pc = (a, b) => b ? (a / b * 100).toFixed(1) + '%' : '–';
+  const verdict = (A, B) => {
+    if (!A || !B || A.sent < 100 || B.sent < 100) return '<span class="mu">too early: needs 100+ texts each</span>';
+    const pa = A.ordered / A.sent, pb = B.ordered / B.sent, p = (A.ordered + B.ordered) / (A.sent + B.sent);
+    const z = Math.abs(pa - pb) / Math.sqrt(p * (1 - p) * (1 / A.sent + 1 / B.sent) || 1);
+    const win = pb > pa ? 'B' : 'A';
+    return z >= 1.96 ? `<b class="up">${win} wins</b> (${pc(Math.max(A.ordered / A.sent, B.ordered / B.sent) * 100, 100)} vs ${pc(Math.min(A.ordered / A.sent, B.ordered / B.sent) * 100, 100)} ordered)` : '<span class="mu">no clear winner yet</span>';
+  };
+  el.innerHTML = `<h2>A/B wording tests <small>version A against version B, each against the customers held back</small></h2><div class="scroll"><table>
+    <tr><th>Cycle · offer</th><th>Testing</th><th>Version</th><th>Sent</th><th>Ordered</th><th>Redeemed</th><th>Sales per text</th><th>Opted out</th><th>Result</th></tr>
+    ${groups.map(g => { const rows = data.filter(r => key(r) === g), A = rows.find(r => r.ab === 'A'), B = rows.find(r => r.ab === 'B'), f = rows[0];
+      return rows.map((r, i) => `<tr><td>${i ? '' : `${esc(f.cycle)}<div class="mu" style="font-size:12px">${f.slot}. ${esc(f.offer || '')}</div>`}</td><td>${i ? '' : esc(f.ab_label || '')}</td><td><b>${r.ab}</b></td>
+        <td>${num(r.sent)}</td><td>${pc(r.ordered, r.sent)}</td><td>${pc(r.redeemed, r.sent)}</td><td>${r.sent ? money(r.sales / r.sent, 2) : '–'}</td><td>${pc(r.opted_out, r.sent)}</td>
+        <td>${i ? '' : verdict(A, B)}${i || !f.still_counting ? '' : '<div class="mu" style="font-size:12px">still counting</div>'}</td></tr>`).join(''); }).join('')}
+  </table></div><p class="note">"Wins" means the gap in the share who ordered is bigger than chance would explain (95% confidence). Keep the winner as version A and test the next idea as B.</p>`;
 }
