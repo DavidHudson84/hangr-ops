@@ -765,7 +765,7 @@ async function loadServiceOrders(wb, file, from, to, say, override) {
   const val = (sh, r, c) => { const v = cell(sh, r, c)?.v; return (typeof v === 'string' && v.trim() === '') ? null : v ?? null; };
   const hd = []; for (let c = 0; c <= range.e.c; c++) hd.push(String(val(ws, 3, c) ?? '').trim().toLowerCase());
   const ci = n => hd.indexOf(n);
-  const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service'), orders: ci('# order'), disc: ci('$ discounts') };
+  const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service'), orders: ci('# order'), disc: ci('$ discounts'), emp: ci('employee') };
   if (c.order < 0 || c.sales < 0 || c.service < 0 || c.pieces < 0 || c.orders < 0) throw new UploadStop(["This file is missing some of the standard columns (Order, $ Sales, # Order, # Pieces, Service). Export it again straight from the POS and upload it without opening or editing it."], [], []);
   const hard = [], soft = [], warn = [];
   const grain = periodOf(from, to); periodChecks(hard, from, to, grain === 'day' ? null : grain, false);
@@ -776,12 +776,12 @@ async function loadServiceOrders(wb, file, from, to, say, override) {
   const fr = XLSX.utils.decode_range(fl['!ref']), fh = [];
   for (let k = 0; k <= fr.e.c; k++) fh.push(String(val(fl, 3, k) ?? '').trim().toLowerCase());
   const fi = n => fh.indexOf(n);
-  const f = { order: fi('order number'), store: fi('store'), name: fi('account'), phone: fi('phone'), email: fi('email'), date: fi('order date'), time: fi('order time'), status: fi('status') };
+  const f = { pickup: fi('pickup employee'), order: fi('order number'), store: fi('store'), name: fi('account'), phone: fi('phone'), email: fi('email'), date: fi('order date'), time: fi('order time'), status: fi('status') };
   if (f.order < 0 || f.name < 0 || f.date < 0) throw new Error('The Flat tab is missing Order Number, Account or Order Date.');
   const who = {};
   for (let r = 4; r <= fr.e.r; r++) {
     const id = receiptOf(cell(fl, r, f.order)); if (!id || who[id]) continue;
-    who[id] = { no: String(val(fl, r, f.order) ?? (String(cell(fl, r, f.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''), store: val(fl, r, f.store), name: String(val(fl, r, f.name) ?? '').trim(), mobile: String(val(fl, r, f.phone) ?? '').replace(/\s/g, '') || null,
+    who[id] = { pickup: f.pickup >= 0 && val(fl, r, f.pickup) ? String(val(fl, r, f.pickup)).trim() : null, no: String(val(fl, r, f.order) ?? (String(cell(fl, r, f.order)?.f || '').match(/,\s*"([^"]+)"\)/) || [])[1] ?? ''), store: val(fl, r, f.store), name: String(val(fl, r, f.name) ?? '').trim(), mobile: String(val(fl, r, f.phone) ?? '').replace(/\s/g, '') || null,
       email: String(val(fl, r, f.email) ?? '').trim() || null, date: parseDate(val(fl, r, f.date)), time: parseTime(val(fl, r, f.time)), status: val(fl, r, f.status) };
   }
   const rows = [], totals = [], unknown = new Set(); let store = null, svc = null, missing = 0;
@@ -801,7 +801,7 @@ async function loadServiceOrders(wb, file, from, to, say, override) {
     const id = receiptOf(cell(ws, r, c.order)); if (!id || !store || store === 'ignore' || !svc) continue;
     const w = who[id]; if (!w) { missing++; continue; }
     const name = w.name, [last, firstN] = name.includes(',') ? name.split(',').map(x => x.trim()) : [name, ''];
-    rows.push({ store: store.name, receipt: id, order_no: w.no, service: svc, sales: Math.round(toNum(val(ws, r, c.sales)) * 100) / 100, pieces: Math.round(toNum(val(ws, r, c.pieces))),
+    rows.push({ discount: c.disc >= 0 ? Math.round(toNum(val(ws, r, c.disc)) * 100) / 100 : null, employee: c.emp >= 0 && val(ws, r, c.emp) ? String(val(ws, r, c.emp)).trim() : null, pickup_employee: w.pickup, store: store.name, receipt: id, order_no: w.no, service: svc, sales: Math.round(toNum(val(ws, r, c.sales)) * 100) / 100, pieces: Math.round(toNum(val(ws, r, c.pieces))),
       order_date: w.date, order_time: w.time, status: w.status ? String(w.status) : null,
       cust_key: name ? `${store.name}::${name}`.replace(/ /g, '_').toLowerCase().slice(0, 100) : null, full_name: name || null, first_name: firstN || null, last_name: last || null, mobile: w.mobile, email: w.email });
   }
@@ -935,14 +935,17 @@ async function discountTypesCard(el) {
     sb.from('offer_library').select('slot,name').eq('org_id', S.org.id).order('slot')]);
   el.innerHTML = `<h2>Discounts <small>what each POS discount is for</small></h2>
     <p class="note">Each discount the counter uses in My Clean POS appears here once a Coupons and Discounts report is uploaded. Marketing ones are matched to the texts a customer received, so every offer shows who redeemed it. Give each offer its own POS discount (e.g. "Doona offer 20%") so results don't mix.</p>
-    <div class="scroll"><table><tr><th>POS discount</th><th>What it's for</th><th>Offer it belongs to</th><th>Note</th></tr>
+    <div class="scroll"><table><tr><th>POS discount</th><th>What it's for</th><th>Offer it belongs to</th><th>Most % off</th><th>Most $ off</th><th>Set %</th><th>Order at least $</th><th>No order in last (days)</th><th>Note</th></tr>
     ${(dt || []).map(d => `<tr><td><b>${esc(d.name)}</b></td>
       <td><select data-dp="${esc(d.name)}">${PURPOSES.map(([v, n]) => `<option value="${v}" ${v === d.purpose ? 'selected' : ''}>${n}</option>`).join('')}</select></td>
       <td><select data-ds="${esc(d.name)}"><option value="">none</option>${(lib || []).map(o => `<option value="${o.slot}" ${o.slot === d.offer_slot ? 'selected' : ''}>${o.slot}. ${esc(o.name)}</option>`).join('')}</select></td>
-      <td class="mu">${esc(d.note || '')}</td></tr>`).join('') || '<tr><td colspan="4" class="mu">None yet: upload a Coupons and Discounts report.</td></tr>'}</table></div>`;
+      ${['max_pct', 'max_amount', 'expected_pct', 'min_order', 'min_gap_days'].map(k => `<td><input type="number" step="any" data-rule="${k}" data-rn="${esc(d.name)}" value="${d[k] ?? ''}" style="width:70px"></td>`).join('')}
+      <td class="mu">${esc(d.note || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="mu">None yet: upload a Coupons and Discounts report.</td></tr>'}</table></div>
+    <p class="note">Rules drive Marketing › Discount checks. Leave a box blank for no rule. Any discount that takes the whole order to $0 is always flagged. "Order at least" is the price before the discount.</p>`;
   const save = async (name, patch) => { const { error } = await sb.from('discount_types').update({ ...patch, note: null, updated_at: new Date().toISOString() }).eq('org_id', S.org.id).eq('name', name); if (error) alert(error.message); };
   el.querySelectorAll('[data-dp]').forEach(x => x.onchange = () => save(x.dataset.dp, { purpose: x.value }));
   el.querySelectorAll('[data-ds]').forEach(x => x.onchange = () => save(x.dataset.ds, { offer_slot: x.value ? +x.value : null }));
+  el.querySelectorAll('[data-rule]').forEach(x => x.onchange = () => save(x.dataset.rn, { [x.dataset.rule]: x.value === '' ? null : +x.value }));
 }
 
 /* ---------- people: invite by email, roles, password resets, two-factor ---------- */

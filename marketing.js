@@ -2,7 +2,7 @@
    queue and results, opt-outs, templates. Every send path ends in sms_sends; the sms-send function only sends
    while Settings > mode is test or live. */
 
-const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
+const MK_TABS = [['offers', 'Offers'], ['flows', 'Automated flows'], ['loyalty', '$200 draw & free order'], ['referrals', 'Referrals'], ['reviews', 'Reviews'], ['campaigns', 'One-off campaigns'], ['results', 'Queue & results'], ['checks', 'Discount checks'], ['optouts', 'Opt-outs'], ['templates', 'Templates'], ['settings', 'Sending']];
 const segs = t => t.length <= 160 ? 1 : Math.ceil(t.length / 153);
 const FOOT = ' - MasterDC Reply STOP to opt out.';
 const statusChip = s => `<span class="chip" style="${s === 'approved' || s === 'queued' || s === 'confirmed' ? 'background:#e6f4ea;color:#127a3d' : s === 'cancelled' ? 'background:#fdecea;color:#b42318' : ''}">${esc(s)}</span>`;
@@ -19,7 +19,7 @@ async function marketingView(tab = 'offers') {
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
   <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
-  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
+  const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, results: mkResults, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));
 }
 
@@ -321,4 +321,43 @@ async function serviceMixCard(el) {
     <tr><th>Service</th><th>All stores</th>${st.map(id => `<th>${esc(sn(id))}</th>`).join('')}</tr>
     ${Object.entries(SVC_GROUPS).map(([g, n]) => `<tr><td>${n}</td>${cell(g)}${st.map(id => cell(g, id)).join('')}</tr>`).join('')}
   </table></div><p class="note">Used / <span class="mu">never used</span>, counting only customers who appear in the service history. It means more as the history grows.</p></div>`;
+}
+
+/* ---------- discount checks: every discounted order against the rules for that discount ---------- */
+const FLAG_TXT = { full: '100% off', over_pct: 'bigger % than allowed', over_amount: 'more $ off than allowed', wrong_pct: 'not the set %',
+  under_min: 'order under the minimum', recent_customer: 'customer ordered too recently', customer_unknown: 'customer not matched yet', added_later: 'added after drop-off' };
+async function mkChecks(el, weeks = 4) {
+  const to = iso(new Date()), from = addDays(to, -7 * weeks);
+  const { data: d, error } = await sb.rpc('discount_checks', { p_org: S.org.id, p_from: from, p_to: to });
+  if (error) { el.innerHTML = `<div class="card err">${esc(error.message)}</div>`; return; }
+  if (!d?.periods?.length) { el.innerHTML = '<div class="card"><h2>Discount checks</h2><p class="note">Upload the weekly Coupons and Discounts report to start the checks.</p></div>'; return; }
+  const flagged = d.flagged, serious = flagged.filter(f => f.flags.some(x => ['full', 'added_later', 'over_amount', 'over_pct', 'wrong_pct'].includes(x)));
+  const cnt = k => flagged.filter(f => f.flags.includes(k)).length;
+  const chips = f => f.flags.map(x => `<span class="chip" style="${['full', 'added_later'].includes(x) ? 'background:#fde2e1;color:#b42318' : x === 'customer_unknown' ? '' : 'background:#fff1d6;color:#8a5300'}">${FLAG_TXT[x] || x}</span>`).join(' ');
+  const norm = Object.fromEntries(d.store_norms.map(s => [s.store, s.counter_avg_pct]));
+  el.innerHTML = `<div class="card"><h2>Discount checks <small>discounted orders paid in the last <select id="ckW">${[1, 4, 13, 26].map(w => `<option ${w === weeks ? 'selected' : ''} value="${w}">${w} week${w > 1 ? 's' : ''}</option>`).join('')}</select> of loaded weeks</small></h2>
+    <div class="grid g4" style="margin-bottom:10px">
+      <div class="tile"><div class="l">100% off</div><div class="v ${cnt('full') ? 'dn' : ''}">${num(cnt('full'))}</div><div class="d">whole order free</div></div>
+      <div class="tile"><div class="l">Added after drop-off</div><div class="v ${cnt('added_later') ? 'dn' : ''}">${num(cnt('added_later'))}</div><div class="d">discount bigger at payment than when the order came in</div></div>
+      <div class="tile"><div class="l">Over the limit</div><div class="v">${num(flagged.filter(f => f.flags.some(x => ['over_pct', 'over_amount', 'wrong_pct'].includes(x))).length)}</div><div class="d">more % or $ than that discount allows</div></div>
+      <div class="tile"><div class="l">SMS offer misused</div><div class="v">${num(flagged.filter(f => f.flags.some(x => ['under_min', 'recent_customer'].includes(x))).length)}</div><div class="d">under $30, or ordered in the last 60 days</div></div></div>
+    <p class="note">Rules per discount are set in Admin › Discounts. "Added after drop-off" compares the discount when the order was taken (Sales Incoming by service and order) with the discount at payment (Coupons and Discounts); it can only see orders collected in a later week than they came in. Payment type (cash or card) isn't in these reports, so cash isn't shown.</p></div>
+
+  <div class="card"><h2>By staff member <small>whose name is on the order</small></h2><div class="scroll"><table>
+    <tr><th>Staff</th><th>Store</th><th>Orders taken</th><th>Discounted</th><th>$ off</th><th>Counter discounts</th><th>Avg counter %</th><th>Store avg %</th><th>Flagged</th><th>100% off</th><th>Added later</th></tr>
+    ${d.by_employee.map(e => { const hi = e.counter_avg_pct != null && norm[e.store] != null && e.counter_avg_pct > norm[e.store] * 1.5;
+      return `<tr><td><b>${esc(e.employee || '?')}</b></td><td>${esc(e.store)}</td><td>${e.orders_taken ? num(e.orders_taken) : '<span class="mu">–</span>'}</td><td>${num(e.discounted)}${e.orders_taken ? ` <span class="mu">(${(e.discounted / e.orders_taken * 100).toFixed(0)}%)</span>` : ''}</td>
+      <td>${money(e.discount, 2)}</td><td>${num(e.counter_orders)} · ${money(e.counter_discount, 2)}</td><td class="${hi ? 'dn' : ''}">${e.counter_avg_pct == null ? '–' : e.counter_avg_pct + '%'}</td><td class="mu">${norm[e.store] == null ? '–' : norm[e.store] + '%'}</td>
+      <td class="${e.flagged ? 'dn' : ''}">${num(e.flagged)}</td><td class="${e.full_off ? 'dn' : ''}">${num(e.full_off)}</td><td class="${e.added_later ? 'dn' : ''}">${num(e.added_later)}</td></tr>`; }).join('')}
+  </table></div><p class="note">Red average: this person's counter discounts are 50% bigger than their store's average. "Orders taken" fills in from the Sales Incoming by service and order uploads.</p></div>
+
+  <div class="card"><h2>Flagged orders <small>${num(flagged.length)} · ${num(serious.length)} serious</small></h2>
+    <div class="row"><label style="margin:0"><input type="checkbox" id="ckSer"> Hide "customer not matched yet"</label></div>
+    <div class="scroll"><table id="ckT"><tr><th>Order date</th><th>Store</th><th>Order</th><th>Discount</th><th>Off</th><th>Full price</th><th>%</th><th>Staff</th><th>Customer</th><th>Last order before</th><th>Why</th></tr>
+    ${flagged.map(f => `<tr data-only-unknown="${f.flags.length === 1 && f.flags[0] === 'customer_unknown' ? 1 : 0}"><td>${fmtD(f.date)}</td><td>${esc(f.store)}</td><td>${esc(f.order_no || '')}</td><td>${esc(f.discount_name)}</td>
+      <td>${money(f.discount, 2)}</td><td>${money(f.full_price, 2)}</td><td>${f.pct ?? '–'}%</td><td>${esc(f.employee || '')}</td>
+      <td>${f.customer_id ? `<a href="#/customer/${f.customer_id}">${esc(f.customer || '')}</a>` : '<span class="mu">not matched</span>'}</td><td>${f.prev_order ? fmtD(f.prev_order) : '<span class="mu">–</span>'}</td><td>${chips(f)}</td></tr>`).join('') || '<tr><td colspan="11" class="mu">Nothing flagged</td></tr>'}
+    </table></div></div>`;
+  $('#ckW').onchange = () => mkChecks(el, +$('#ckW').value);
+  $('#ckSer').onchange = () => el.querySelectorAll('#ckT tr[data-only-unknown="1"]').forEach(tr => tr.hidden = $('#ckSer').checked);
 }
