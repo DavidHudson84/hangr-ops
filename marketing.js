@@ -324,6 +324,7 @@ async function serviceMixCard(el) {
 }
 
 /* ---------- discount checks: every discounted order against the rules for that discount ---------- */
+const POS_RECEIPT = 'https://master.pos.mydrycleaning.com.au/api/v1.0/order/receipt/';
 const FLAG_TXT = { full: '100% off', over_pct: 'bigger % than allowed', over_amount: 'more $ off than allowed', wrong_pct: 'not the set %',
   under_min: 'order under the minimum', recent_customer: 'customer ordered too recently', customer_unknown: 'customer not matched yet', added_later: 'added after drop-off' };
 async function mkChecks(el, weeks = 4) {
@@ -344,20 +345,32 @@ async function mkChecks(el, weeks = 4) {
     <p class="note">Rules per discount are set in Admin › Discounts. "Added after drop-off" compares the discount when the order was taken (Sales Incoming by service and order) with the discount at payment (Coupons and Discounts); it can only see orders collected in a later week than they came in. Payment type (cash or card) isn't in these reports, so cash isn't shown.</p></div>
 
   <div class="card"><h2>By staff member <small>whose name is on the order</small></h2><div class="scroll"><table>
-    <tr><th>Staff</th><th>Store</th><th>Orders taken</th><th>Discounted</th><th>$ off</th><th>Counter discounts</th><th>Avg counter %</th><th>Store avg %</th><th>Flagged</th><th>100% off</th><th>Added later</th></tr>
+    <tr><th>Staff</th><th>Store</th><th>Orders taken</th><th>Discounted</th><th>$ off</th><th>Counter discounts</th><th>Avg counter %</th><th>Store avg %</th><th>Flagged</th><th>Still to check</th><th>Confirmed misuse</th><th>100% off</th><th>Added later</th></tr>
     ${d.by_employee.map(e => { const hi = e.counter_avg_pct != null && norm[e.store] != null && e.counter_avg_pct > norm[e.store] * 1.5;
       return `<tr><td><b>${esc(e.employee || '?')}</b></td><td>${esc(e.store)}</td><td>${e.orders_taken ? num(e.orders_taken) : '<span class="mu">–</span>'}</td><td>${num(e.discounted)}${e.orders_taken ? ` <span class="mu">(${(e.discounted / e.orders_taken * 100).toFixed(0)}%)</span>` : ''}</td>
       <td>${money(e.discount, 2)}</td><td>${num(e.counter_orders)} · ${money(e.counter_discount, 2)}</td><td class="${hi ? 'dn' : ''}">${e.counter_avg_pct == null ? '–' : e.counter_avg_pct + '%'}</td><td class="mu">${norm[e.store] == null ? '–' : norm[e.store] + '%'}</td>
-      <td class="${e.flagged ? 'dn' : ''}">${num(e.flagged)}</td><td class="${e.full_off ? 'dn' : ''}">${num(e.full_off)}</td><td class="${e.added_later ? 'dn' : ''}">${num(e.added_later)}</td></tr>`; }).join('')}
+      <td class="${e.flagged ? 'dn' : ''}">${num(e.flagged)}</td><td>${num(e.to_check)}</td><td class="${e.misuse ? 'dn' : ''}"><b>${num(e.misuse)}</b>${e.misuse ? ` · ${money(e.misuse_amount, 2)}` : ''}</td><td class="${e.full_off ? 'dn' : ''}">${num(e.full_off)}</td><td class="${e.added_later ? 'dn' : ''}">${num(e.added_later)}</td></tr>`; }).join('')}
   </table></div><p class="note">Red average: this person's counter discounts are 50% bigger than their store's average. "Orders taken" fills in from the Sales Incoming by service and order uploads.</p></div>
 
   <div class="card"><h2>Flagged orders <small>${num(flagged.length)} · ${num(serious.length)} serious</small></h2>
-    <div class="row"><label style="margin:0"><input type="checkbox" id="ckSer"> Hide "customer not matched yet"</label></div>
-    <div class="scroll"><table id="ckT"><tr><th>Order date</th><th>Store</th><th>Order</th><th>Discount</th><th>Off</th><th>Full price</th><th>%</th><th>Staff</th><th>Customer</th><th>Last order before</th><th>Why</th></tr>
-    ${flagged.map(f => `<tr data-only-unknown="${f.flags.length === 1 && f.flags[0] === 'customer_unknown' ? 1 : 0}"><td>${fmtD(f.date)}</td><td>${esc(f.store)}</td><td>${esc(f.order_no || '')}</td><td>${esc(f.discount_name)}</td>
+    <div class="row"><label style="margin:0"><input type="checkbox" id="ckSer"> Hide "customer not matched yet"</label>
+      <label style="margin:0 0 0 14px"><input type="checkbox" id="ckOk" checked> Hide orders checked and OK</label></div>
+    <div class="scroll"><table id="ckT"><tr><th>Order date</th><th>Store</th><th>Order</th><th>Discount</th><th>Off</th><th>Full price</th><th>%</th><th>Staff</th><th>Customer</th><th>Last order before</th><th>Why</th><th>What you found</th></tr>
+    ${flagged.map((f, i) => `<tr data-only-unknown="${f.flags.length === 1 && f.flags[0] === 'customer_unknown' ? 1 : 0}" data-ok="${f.outcome === 'ok' ? 1 : 0}"><td>${fmtD(f.date)}</td><td>${esc(f.store)}</td>
+      <td><a href="${POS_RECEIPT}${esc(f.receipt)}" target="_blank" rel="noopener" title="Open in My Clean POS">${esc(f.order_no || 'open')}</a></td><td>${esc(f.discount_name)}</td>
       <td>${money(f.discount, 2)}</td><td>${money(f.full_price, 2)}</td><td>${f.pct ?? '–'}%</td><td>${esc(f.employee || '')}</td>
-      <td>${f.customer_id ? `<a href="#/customer/${f.customer_id}">${esc(f.customer || '')}</a>` : '<span class="mu">not matched</span>'}</td><td>${f.prev_order ? fmtD(f.prev_order) : '<span class="mu">–</span>'}</td><td>${chips(f)}</td></tr>`).join('') || '<tr><td colspan="11" class="mu">Nothing flagged</td></tr>'}
-    </table></div></div>`;
+      <td>${f.customer_id ? `<a href="#/customer/${f.customer_id}">${esc(f.customer || '')}</a>` : '<span class="mu">not matched</span>'}</td><td>${f.prev_order ? fmtD(f.prev_order) : '<span class="mu">–</span>'}</td><td>${chips(f)}</td>
+      <td style="min-width:230px"><select data-rv="${i}"><option value="">Not checked</option>${[['checking', 'Checking'], ['ok', 'OK, allowed'], ['misuse', 'Misuse']].map(([v, n]) => `<option value="${v}" ${v === f.outcome ? 'selected' : ''}>${n}</option>`).join('')}</select>
+        <input data-rn="${i}" placeholder="note, e.g. what the trail showed" value="${esc(f.note || '')}" style="width:100%;margin-top:4px">
+        ${f.reviewed_by ? `<div class="mu" style="font-size:11px">${esc(f.reviewed_by)} · ${new Date(f.reviewed_at).toLocaleDateString('en-AU')}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="12" class="mu">Nothing flagged</td></tr>'}
+    </table></div><p class="note">The order number opens the order in My Clean POS (sign in there first) so you can read its trail: who added the discount and when. Record what you found; confirmed misuse is counted against the staff member above.</p></div>`;
   $('#ckW').onchange = () => mkChecks(el, +$('#ckW').value);
-  $('#ckSer').onchange = () => el.querySelectorAll('#ckT tr[data-only-unknown="1"]').forEach(tr => tr.hidden = $('#ckSer').checked);
+  const hide = () => el.querySelectorAll('#ckT tr[data-ok]').forEach(tr => tr.hidden = ($('#ckSer').checked && tr.dataset.onlyUnknown === '1') || ($('#ckOk').checked && tr.dataset.ok === '1'));
+  $('#ckSer').onchange = hide; $('#ckOk').onchange = hide; hide();
+  const saveRv = async i => { const f = flagged[i], outcome = el.querySelector(`[data-rv="${i}"]`).value, note = el.querySelector(`[data-rn="${i}"]`).value.trim();
+    const q = outcome ? sb.from('discount_reviews').upsert({ org_id: S.org.id, receipt: f.receipt, discount_name: f.discount_name, outcome, note: note || null, reviewed_by: S.user.id, reviewed_email: S.user.email, reviewed_at: new Date().toISOString() })
+      : sb.from('discount_reviews').delete().eq('receipt', f.receipt).eq('discount_name', f.discount_name);
+    const { error } = await q; if (error) alert(error.message); };
+  el.querySelectorAll('[data-rv]').forEach(x => x.onchange = () => saveRv(+x.dataset.rv));
+  el.querySelectorAll('[data-rn]').forEach(x => x.onchange = () => { const sel = el.querySelector(`[data-rv="${x.dataset.rn}"]`); if (!sel.value) sel.value = 'checking'; saveRv(+x.dataset.rn); });
 }
