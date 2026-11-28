@@ -459,7 +459,7 @@ async function uploadView() {
     <p>Drop in any number of <b>Sales Incoming</b> or <b>Customer Orders</b> Excel files. Each file is checked, then loaded. Loading the same file twice is safe: it replaces what was there, it never adds twice.</p>
     <div class="drop" id="drop">Drop .xlsx files here, or <label style="display:inline;color:var(--blue);cursor:pointer"><input type="file" id="fi" accept=".xlsx,.xls" multiple hidden>choose files</label></div>
     <div class="log" id="log"></div>
-    <p class="note">Sales Incoming: one day, one week (Monday to Sunday) or one calendar month per file. Customer Orders: any date range; it replaces every order for those stores in that range. Sales Incoming by service and order (the export with the Flat tab): any date range; each order is replaced by its receipt, so overlapping files never double up. It builds each customer's service profile.</p>
+    <p class="note">Each week: <b>Sales Incoming by Store, Service and Order</b> (Include discounts ticked) first, then <b>Customer Orders</b>, both Monday to Sunday. Backfill: one whole calendar month per file. A file is only loaded if it's complete and adds up; anything that looks wrong is stopped with the reason. Every loaded period is then locked, so old reports never change; only David can unlock one.</p>
   </div>
   <div class="card"><h2>Recent uploads</h2><div class="scroll"><table><tr><th>When</th><th>File</th><th>Type</th><th>Covers</th><th>Rows</th><th>Status</th></tr>
     ${(ups || []).map(u => `<tr><td>${new Date(u.created_at).toLocaleString('en-AU')}</td><td>${esc(u.file_name)}</td><td>${u.kind}${u.grain ? ' · ' + u.grain : ''}</td><td>${u.date_from ? fmtD(u.date_from) + ' – ' + fmtD(u.date_to) : '–'}</td><td>${num(u.rows_in)}</td><td>${u.status}</td></tr>`).join('')}
@@ -474,11 +474,91 @@ async function uploadView() {
 async function handleFiles(files) {
   for (const f of files) {
     const line = document.createElement('div'); line.textContent = `${f.name}: reading…`; $('#log').prepend(line);
-    try { line.innerHTML = `<b>${esc(f.name)}</b>: ${await loadFile(f, m => line.innerHTML = `<b>${esc(f.name)}</b>: ${esc(m)}`)}`; }
-    catch (e) { line.innerHTML = `<b>${esc(f.name)}</b>: <span class="err">${esc(e.message || e)}</span>`; console.error(e); }
+    await runFile(f, line, false);
   }
   S.cache = {};
 }
+async function runFile(f, line, override) {
+  const say = m => line.innerHTML = `<b>${esc(f.name)}</b>: ${esc(m)}`;
+  try { line.innerHTML = `<b>${esc(f.name)}</b>: ${await loadFile(f, say, override)}`; }
+  catch (e) {
+    if (e instanceof UploadStop) {
+      line.innerHTML = `<b>${esc(f.name)}</b>: ${stopHtml(e, S.platform)}`;
+      const b = line.querySelector('[data-override]'); if (b) b.onclick = () => runFile(f, line, true);
+    } else {
+      const m = String(e.message || e);
+      line.innerHTML = `<b>${esc(f.name)}</b>: <span class="err">${esc(m.replace(/^LOCKED:\s*/, ''))}</span>${/^LOCKED/.test(m) ? ' <span class="note">Send David a screenshot.</span>' : ''}`; console.error(e);
+    }
+  }
+}
+
+/* ---------- upload checks: nothing loads unless the file is clean ---------- */
+// hard = wrong for everyone; soft = looks wrong, only David can load it anyway; warn = loads, but worth knowing
+class UploadStop extends Error { constructor(hard, soft, warn) { super('stopped'); this.hard = hard; this.soft = soft; this.warn = warn; } }
+const pctOff = (a, b) => Math.round((a / b - 1) * 100);
+function periodOf(from, to) {
+  const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1, f = new Date(from + 'T00:00:00');
+  if (days === 7 && f.getDay() === 1) return 'week';
+  if (f.getDate() === 1 && addDays(to, 1).endsWith('-01') && days >= 28) return 'month';
+  if (days === 1) return 'day';
+  return null;
+}
+const periodName = (grain, to) => grain === 'week' ? `the week ending ${fmtD(to)}` : grain === 'month' ? new Date(to + 'T00:00:00').toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }) : fmtD(to);
+function periodChecks(hard, from, to, grain, allowDay) {
+  const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1;
+  if (!grain || (grain === 'day' && !allowDay))
+    hard.push(`This file runs ${fmtD(from)} to ${fmtD(to)} (${days} day${days === 1 ? '' : 's'}). A weekly file must run <b>Monday to Sunday</b>, and a backfill file must be <b>one whole calendar month</b>. Change the dates and export again.`);
+  if (to >= iso(new Date())) hard.push(`This file runs to ${fmtD(to)}, which isn't over yet, so its figures would be incomplete. Export it once the ${grain === 'month' ? 'month' : 'week'} has finished (on Monday for a week).`);
+}
+// f.stores: Map(store name -> { sales, discounts, orders }) for sales-type files; f.orders: same shape for Customer Orders
+async function uploadGate(kind, grain, from, to, f, override) {
+  const hard = [...(f.hard || [])], soft = [...(f.soft || [])], warn = [...(f.warn || [])];
+  if (!hard.length) {
+    const { data: ck, error } = await sb.rpc('upload_check', { p_org: S.org.id, p_kind: kind, p_grain: grain, p_from: from, p_to: to });
+    if (error) throw error;
+    const inFile = new Set(f.stores.keys()), when = periodName(grain, to);
+    const missing = (ck.expected || []).filter(n => !inFile.has(n));
+    if (missing.length) soft.push(`<b>${missing.map(esc).join(', ')}</b> ${missing.length === 1 ? "isn't" : "aren't"} in this file, but traded in the weeks before. Check every store is selected on the filter screen and export again. If a store has closed, tell David.`);
+    const ex = new Map((ck.existing || []).map(e => [e.store, e]));
+    if (kind !== 'orders') {
+      if (ck.locked) {
+        const off = [...f.stores].filter(([n, v]) => ex.has(n) && (Math.abs(v.sales - ex.get(n).sales) > 0.5 || (ex.get(n).discounts && Math.abs(v.discounts - ex.get(n).discounts) > 0.5)));
+        const gone = [...ex.keys()].filter(n => !inFile.has(n));
+        if (off.length || gone.length) hard.push(`Sales for ${when} are already loaded and <b>locked</b>, and this file is different: ${[...off.map(([n, v]) => `${esc(n)} locked at ${money(ex.get(n).sales)} sales / ${money(ex.get(n).discounts)} discounts, this file ${money(v.sales)} / ${money(v.discounts)}`), ...gone.map(n => `${esc(n)} is locked but missing from this file`)].join('; ')}. The POS has changed since that period was loaded (an order edited, voided or discounted after it closed). Don't upload it. Send David a screenshot: only he can unlock a period.`);
+      } else if (ex.size) {
+        const off = [...f.stores].filter(([n, v]) => ex.has(n) && Math.abs(v.sales - ex.get(n).sales) > 0.5);
+        if (off.length) warn.push(`David unlocked ${when}. This file replaces: ${off.map(([n, v]) => `${esc(n)} ${money(ex.get(n).sales)} → ${money(v.sales)}`).join(', ')}.`);
+      }
+      const hist = new Map((ck.history || []).map(h => [h.store, h])), lim = grain === 'month' ? 40 : 50, need = grain === 'month' ? 2 : 3;
+      const swing = [...f.stores].filter(([n, v]) => { const h = hist.get(n); return h && h.periods >= need && h.avg >= 500 && Math.abs(pctOff(v.sales, h.avg)) > lim; });
+      if (swing.length) soft.push(`${swing.map(([n, v]) => { const h = hist.get(n), p = pctOff(v.sales, h.avg); return `<b>${esc(n)}</b> is ${Math.abs(p)}% ${p > 0 ? 'up on' : 'down on'} its average for the ${grain === 'month' ? 'previous months' : 'last 4 weeks'} (${money(v.sales)} against ${money(h.avg)})`; }).join('; ')}. Check the dates and the store selection. If the file is right, send David a screenshot so he can approve it.`);
+      if (f.discCol && f.stores.size && [...f.stores.values()].every(v => !v.discounts)) soft.push('Every store shows $0 discounts. Check <b>Include discounts</b> is ticked on the filter screen and export again.');
+    } else {
+      if (ck.locked && ex.size) {
+        const same = [...ex].every(([n, e]) => f.stores.has(n) && f.stores.get(n).orders === e.orders && Math.abs(f.stores.get(n).sales - e.sales) <= 1);
+        if (same) return { already: true };
+        hard.push(`Customer Orders for ${fmtD(from)} to ${fmtD(to)} are already loaded and <b>locked</b>, and this file is different (${[...ex].filter(([n, e]) => !f.stores.has(n) || f.stores.get(n).orders !== e.orders).map(([n, e]) => `${esc(n)}: ${num(e.orders)} orders locked, ${num(f.stores.get(n)?.orders || 0)} in this file`).join('; ') || 'order totals differ'}). Orders have been changed in the POS since. Don't upload it. Send David a screenshot: only he can unlock it.`);
+      }
+      const ps = new Map((ck.period_sales || []).map(p => [p.store, p.sales]));
+      if (!ps.size && grain) soft.push(`The Sales Incoming by service and order for ${when} isn't loaded yet. Upload that file first, then this one, so the two can be checked against each other.`);
+      else {
+        const off = [...f.stores].filter(([n, v]) => ps.has(n) && ps.get(n) > 500 && Math.abs(pctOff(v.sales, ps.get(n))) > 15);
+        if (off.length) soft.push(`Customer Orders don't line up with the sales already loaded for ${when}: ${off.map(([n, v]) => `${esc(n)} orders ${money(v.sales)}, sales ${money(ps.get(n))} (${Math.abs(pctOff(v.sales, ps.get(n)))}% apart)`).join('; ')}. They're normally within a few per cent. Check the dates and stores match the sales file and export again.`);
+      }
+    }
+  }
+  if (hard.length || (soft.length && !override)) throw new UploadStop(hard, soft, warn);
+  return { warn };
+}
+function stopHtml(e, canOverride) {
+  const li = (a, cls) => a.map(x => `<li class="${cls}">${x}</li>`).join('');
+  return `<span class="dn"><b>Not loaded.</b></span><ul style="margin:4px 0 4px 18px">${li(e.hard, 'dn')}${li(e.soft, 'dn')}${li(e.warn, 'mu')}</ul>`
+    + (e.hard.length ? '<span class="note">Nothing was loaded. Fix the file and upload it again.</span>'
+      : canOverride ? '<button class="btn" data-override>I\'ve checked it: load anyway</button>'
+      : '<span class="note">Nothing was loaded. Send David a screenshot of this message.</span>');
+}
+const warnHtml = w => w?.length ? ` <span class="mu">${w.join(' ')}</span>` : '';
+
 
 const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 function parseDate(v) {
@@ -507,7 +587,7 @@ function storeFor(posName) {
 }
 const toNum = v => { const x = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[$,]/g, '')); return isFinite(x) ? x : 0; };
 
-async function loadFile(file, say) {
+async function loadFile(file, say, override = false) {
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
   // blank cells come through as "" in some exports; treat them as empty
@@ -515,12 +595,14 @@ async function loadFile(file, say) {
     .map(r => r.map(v => (typeof v === 'string' && v.trim() === '') ? null : v));
   const title = String(grid[0]?.[0] || '');
   const dm = String(grid[1]?.[0] || '').match(/Date:\s*(.+?)\s+to\s+(.+)$/i);
-  if (!dm) throw new Error('Not a My Clean POS export (expected a "Date: … to …" line under the title).');
+  if (!dm) throw new UploadStop(["This isn't a My Clean POS export we can read. Export <b>Sales Incoming</b> grouped by Store, Service and Order (it has a second tab called Flat), or <b>Customer Orders</b>, as .xlsx, and upload it without opening or editing it."], [], []);
   const from = parseDate(dm[1]), to = parseDate(dm[2]);
   if (!from || !to) throw new Error(`Couldn't read the date range "${dm[0]}".`);
   const head = (grid[3] || []).map(h => String(h ?? '').trim().toLowerCase());
-  if (wb.SheetNames.includes('Flat') && head.includes('service') && head.includes('order')) return loadServiceOrders(wb, file, from, to, say);
-  const isOrders = head.includes('start date');
+  const isCustOrders = head.includes('first order') || head.includes('last order');
+  if (!isCustOrders && wb.SheetNames.includes('Flat') && head.includes('service') && head.includes('order')) return loadServiceOrders(wb, file, from, to, say, override);
+  if (!isCustOrders && wb.SheetNames.includes('Flat') && !head.includes('service')) throw new UploadStop(["This Sales Incoming wasn't grouped by <b>Store, Service and Order</b>. Tick all three groupings on the filter screen and export again."], [], []);
+  const isOrders = isCustOrders || head.includes('start date');
   const unknown = new Set();
   if (!isOrders) {
     const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1;
@@ -529,7 +611,8 @@ async function loadFile(file, say) {
     if (days === 1) grain = 'day';
     else if (days === 7) { grain = 'week'; const dow = toD.getDay(); end = addDays(to, (7 - dow) % 7); } // label by the Sunday
     else if (fromD.getDate() === 1 && addDays(to, 1).endsWith('-01') && days >= 28) grain = 'month';
-    else throw new Error(`This file covers ${days} days (${fmtD(from)} to ${fmtD(to)}). Export one day, one week or one calendar month.`);
+    else grain = null;
+    const ph = []; periodChecks(ph, from, to, grain, true); if (ph.length) throw new UploadStop(ph, [], []);
     const col = n => head.findIndex(h => n.includes(h));
     const c = { service: col(['service']), sales: col(['$ sales', 'sales']), disc: col(['$ discounts', 'discounts']), orders: col(['# order', '# orders', 'orders']), pieces: col(['# pieces', 'pieces']) };
     if (c.service < 0 || c.sales < 0) throw new Error('Couldn\'t find the Service and $ Sales columns.');
@@ -539,17 +622,20 @@ async function loadFile(file, say) {
       if (!r[c.service] || !store || store === 'ignore') continue;
       rows.push({ store: store.name, grain, period_end: grain === 'month' ? to : end, service: String(r[c.service]).trim(), sales_gross: Math.round(toNum(r[c.sales]) * 100) / 100, discounts: c.disc >= 0 ? Math.round(toNum(r[c.disc]) * 100) / 100 : 0, orders: Math.round(toNum(r[c.orders])), pieces: Math.round(toNum(r[c.pieces])) });
     }
-    if (unknown.size) throw new Error(`Unknown store name(s): ${[...unknown].join(', ')}. Add them in Admin › Stores, then upload again.`);
-    if (!rows.length) throw new Error('No service rows found.');
+    if (unknown.size) throw new UploadStop([`This file has a store Hangr Ops doesn't know: <b>${[...unknown].map(esc).join(', ')}</b>. Send David a screenshot so he can add it.`], [], []);
+    if (!rows.length) throw new UploadStop(['This file has no sales lines in it. Check the dates and stores on the filter screen and export again.'], [], []);
+    const st = new Map(); for (const r of rows) { const v = st.get(r.store) || { sales: 0, discounts: 0, orders: 0 }; v.sales += r.sales_gross; v.discounts += r.discounts; st.set(r.store, v); }
+    const g = await uploadGate('sales', grain, from, to, { stores: st, discCol: c.disc >= 0, soft: ["This is the plain <b>Sales Incoming</b>, which we no longer use. Export Sales Incoming grouped by <b>Store, Service and Order</b>, with Include discounts ticked, instead."] }, override);
     say(`Sales Incoming, ${grain} ${fmtD(from)} – ${fmtD(to)}, ${rows.length} rows. Loading…`);
     const res = await pushUpload('sales', file.name, grain, from, to, [...new Set(rows.map(r => r.store))], rows, 'ingest_sales', say);
-    return `loaded ${res} sales rows (${grain}, ${fmtD(from)} – ${fmtD(to)}). <span class="up">Done.</span>`;
+    return `loaded ${res} sales rows (${grain}, ${fmtD(from)} – ${fmtD(to)}).${warnHtml(g.warn)} Locked. <span class="up">Done.</span>`;
   }
   // Customer Orders
   const first = n => head.indexOf(n), after = (n, i) => head.indexOf(n, i + 1);
   const ix = { phone: first('phone'), email: first('email'), firstOrder: first('first order'), acctRef: first('account ref no.'), pieces: first('# pieces'), start: first('start date'), time: first('start time'), status: first('status'), picked: first('picked up date'), voided: first('voided date'), total: first('total price'), acctType: first('account charge type') };
   ix.name2 = first('name'); ix.phone2 = after('phone', ix.name2 - 1); ix.email2 = after('email', ix.name2 - 1);
-  if (ix.start < 0 || ix.total < 0) throw new Error('Couldn\'t find the Start Date and Total Price columns.');
+  if (ix.start < 0 || ix.total < 0) throw new UploadStop(["This Customer Orders file is missing the Start Date or Total Price column. Export Customer Orders again with the standard columns and upload it without editing."], [], []);
+  const ograin = periodOf(from, to), oph = []; periodChecks(oph, from, to, ograin === 'day' ? null : ograin, false); if (oph.length) throw new UploadStop(oph, [], []);
   const rows = []; let store = null, cust = null, voided = 0;
   for (const r of grid.slice(4)) {
     if (r[0] && r[ix.start] == null) { store = storeFor(r[0]); if (!store) unknown.add(r[0]); cust = null; continue; }
@@ -565,12 +651,15 @@ async function loadFile(file, say) {
       account_ref: cust?.ref ? String(cust.ref) : null, account_type: cust?.type ? String(cust.type) : null, pos_first_order: cust?.first || null,
       order_date: parseDate(r[ix.start]), order_time: parseTime(r[ix.time]), status: r[ix.status] ? String(r[ix.status]) : null, picked_up_date: parseDate(r[ix.picked]), sales, pieces: Math.round(toNum(r[ix.pieces])) });
   }
-  if (unknown.size) throw new Error(`Unknown store name(s): ${[...unknown].join(', ')}. Add them in Admin › Stores, then upload again.`);
-  if (!rows.length) throw new Error('No orders found.');
+  if (unknown.size) throw new UploadStop([`This file has a store Hangr Ops doesn't know: <b>${[...unknown].map(esc).join(', ')}</b>. Send David a screenshot so he can add it.`], [], []);
+  if (!rows.length) throw new UploadStop(['This file has no orders in it. Check the dates and stores on the filter screen and export again.'], [], []);
   const stores = [...new Set(rows.map(r => r.store))];
+  const ost = new Map(); for (const r of rows) { const v = ost.get(r.store) || { sales: 0, orders: 0 }; v.sales += r.sales; v.orders++; ost.set(r.store, v); }
+  const og = await uploadGate('orders', ograin, from, to, { stores: ost }, override);
+  if (og.already) return `already loaded and locked for ${fmtD(from)} – ${fmtD(to)}, and this file matches it. Nothing to do. <span class="up">Done.</span>`;
   say(`Customer Orders ${fmtD(from)} – ${fmtD(to)}, ${num(rows.length)} orders across ${stores.length} stores (${voided} voided skipped). Loading…`);
   const n = await pushUpload('orders', file.name, null, from, to, stores, rows, 'ingest_orders', say);
-  return `loaded ${num(n)} orders, ${fmtD(from)} – ${fmtD(to)}, ${stores.join(', ')}. <span class="up">Done.</span>`;
+  return `loaded ${num(n)} orders, ${fmtD(from)} – ${fmtD(to)}, ${stores.join(', ')}.${warnHtml(og.warn)} Locked. <span class="up">Done.</span>`;
 }
 
 // Sales Incoming by service and order: tab 1 = store > service > order lines, tab "Flat" = each order with its customer.
@@ -580,7 +669,7 @@ function receiptOf(cell) {
   const m = f.match(/receipt\/([0-9a-f-]{36})/i) || f.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
   return m ? m[1].toLowerCase() : null;
 }
-async function loadServiceOrders(wb, file, from, to, say) {
+async function loadServiceOrders(wb, file, from, to, say, override) {
   const ws = wb.Sheets[wb.SheetNames[0]], fl = wb.Sheets['Flat'];
   const range = XLSX.utils.decode_range(ws['!ref']);
   const cell = (sh, r, c) => sh[XLSX.utils.encode_cell({ r, c })];
@@ -588,7 +677,12 @@ async function loadServiceOrders(wb, file, from, to, say) {
   const hd = []; for (let c = 0; c <= range.e.c; c++) hd.push(String(val(ws, 3, c) ?? '').trim().toLowerCase());
   const ci = n => hd.indexOf(n);
   const c = { order: ci('order'), sales: ci('$ sales'), pieces: ci('# pieces'), service: ci('service'), orders: ci('# order'), disc: ci('$ discounts') };
-  if (c.order < 0 || c.sales < 0 || c.service < 0) throw new Error('Couldn\'t find the Order, $ Sales and Service columns.');
+  if (c.order < 0 || c.sales < 0 || c.service < 0 || c.pieces < 0 || c.orders < 0) throw new UploadStop(["This file is missing some of the standard columns (Order, $ Sales, # Order, # Pieces, Service). Export it again straight from the POS and upload it without opening or editing it."], [], []);
+  const hard = [], soft = [], warn = [];
+  const grain = periodOf(from, to); periodChecks(hard, from, to, grain === 'day' ? null : grain, false);
+  if (c.disc < 0) hard.push("The <b>$ Discounts</b> column is missing, so <b>Include discounts</b> wasn't ticked. Tick it on the filter screen and export again.");
+  const flatDate = String(fl?.A2?.v ?? '').trim(), mainDate = String(ws.A2?.v ?? '').trim();
+  if (flatDate !== mainDate) hard.push(`The two tabs come from different runs (the first tab says "${esc(mainDate)}", the Flat tab says "${esc(flatDate)}"). Export once and upload that file as it is.`);
   // customers from the Flat tab
   const fr = XLSX.utils.decode_range(fl['!ref']), fh = [];
   for (let k = 0; k <= fr.e.c; k++) fh.push(String(val(fl, 3, k) ?? '').trim().toLowerCase());
@@ -602,9 +696,15 @@ async function loadServiceOrders(wb, file, from, to, say) {
       email: String(val(fl, r, f.email) ?? '').trim() || null, date: parseDate(val(fl, r, f.date)), time: parseTime(val(fl, r, f.time)), status: val(fl, r, f.status) };
   }
   const rows = [], totals = [], unknown = new Set(); let store = null, svc = null, missing = 0;
+  // every line must add up: order lines to their service row, services to their store row, stores to the Total row
+  const blocks = [], q = (sh, r, k) => k >= 0 ? toNum(val(sh, r, k)) : 0; let sb_ = null, vb = null, grand = null;
   for (let r = 4; r <= range.e.r; r++) {
     const a = val(ws, r, 0), b = val(ws, r, 1);
-    if (a) { store = /^total$/i.test(String(a).trim()) ? 'ignore' : storeFor(a); if (!store) unknown.add(a); continue; }
+    if (a) { const isTot = /^total$/i.test(String(a).trim()); store = isTot ? 'ignore' : storeFor(a); if (!store) unknown.add(a);
+      const row = { name: String(a).trim(), sales: q(ws, r, c.sales), disc: q(ws, r, c.disc), orders: q(ws, r, c.orders), svcs: [] };
+      if (isTot) grand = row; else { sb_ = row; blocks.push(row); } vb = null; continue; }
+    if (b) { vb = { name: String(b).trim(), sales: q(ws, r, c.sales), disc: q(ws, r, c.disc), orders: q(ws, r, c.orders), pieces: q(ws, r, c.pieces), lines: [] }; sb_?.svcs.push(vb); }
+    else if (vb) { const id = receiptOf(cell(ws, r, c.order)); if (id) vb.lines.push({ id, sales: q(ws, r, c.sales), disc: q(ws, r, c.disc), pieces: q(ws, r, c.pieces) }); }
     if (b) { svc = String(b).trim();
       if (store && store !== 'ignore') totals.push({ store: store.name, service: svc, sales_gross: Math.round(toNum(val(ws, r, c.sales)) * 100) / 100,
         discounts: c.disc >= 0 ? Math.round(toNum(val(ws, r, c.disc)) * 100) / 100 : 0, orders: c.orders >= 0 ? Math.round(toNum(val(ws, r, c.orders))) : 0, pieces: Math.round(toNum(val(ws, r, c.pieces))) });
@@ -616,27 +716,38 @@ async function loadServiceOrders(wb, file, from, to, say) {
       order_date: w.date, order_time: w.time, status: w.status ? String(w.status) : null,
       cust_key: name ? `${store.name}::${name}`.replace(/ /g, '_').toLowerCase().slice(0, 100) : null, full_name: name || null, first_name: firstN || null, last_name: last || null, mobile: w.mobile, email: w.email });
   }
-  if (unknown.size) throw new Error(`Unknown store name(s): ${[...unknown].join(', ')}. Add them in Admin › Stores, then upload again.`);
-  if (!rows.length) throw new Error('No order lines found. Is the order number column a link in this export?');
-  if (missing > rows.length * 0.02) throw new Error(`${missing} order lines aren't on the Flat tab. Export both tabs from the same run and try again.`);
+  if (unknown.size) hard.push(`This file has a store Hangr Ops doesn't know: <b>${[...unknown].map(esc).join(', ')}</b>. Send David a screenshot so he can add it.`);
+  if (!rows.length) hard.push("This file has no orders in it, or the order numbers aren't links. Export it again straight from the POS, as .xlsx, and don't open and re-save it first.");
+  if (missing) hard.push(`${num(missing)} order lines on the first tab aren't on the Flat tab, so the file is incomplete. Export again and upload it without editing.`);
+  const bad = [], cents = x => Math.round(x * 100);
+  for (const s of blocks) {
+    for (const v of s.svcs) {
+      const ls = v.lines.reduce((t, l) => t + l.sales, 0), ld = v.lines.reduce((t, l) => t + l.disc, 0), lp = v.lines.reduce((t, l) => t + l.pieces, 0), lo = new Set(v.lines.map(l => l.id)).size;
+      if (Math.abs(cents(ls) - cents(v.sales)) > 2 || Math.abs(cents(ld) - cents(v.disc)) > 2 || lo !== Math.round(v.orders) || Math.round(lp) !== Math.round(v.pieces))
+        bad.push(`${esc(s.name)} › ${esc(v.name)}: the total line says ${money(v.sales)} on ${num(v.orders)} orders, but its orders add up to ${money(ls)} on ${num(lo)}`);
+    }
+    const ss = s.svcs.reduce((t, v) => t + v.sales, 0);
+    if (Math.abs(ss - s.sales) > 0.1) bad.push(`${esc(s.name)}: the store line says ${money(s.sales)}, but its services add up to ${money(ss)}`);
+  }
+  if (!grand) hard.push('There is no Total line at the bottom of the first tab, so the file may have been cut short. Export it again.');
+  else { const gs = blocks.reduce((t, s) => t + s.sales, 0); if (Math.abs(gs - grand.sales) > 0.5) bad.push(`the Total line says ${money(grand.sales)}, but the stores add up to ${money(gs)}`); }
+  if (bad.length && rows.length && !missing) hard.push(`The file doesn't add up, so it may have been edited or cut short: ${bad.slice(0, 5).join('; ')}${bad.length > 5 ? ` and ${bad.length - 5} more` : ''}. Export it again and upload it without opening or editing it.`);
+  const unk = rows.filter(r => /^unknown service$/i.test(r.service));
+  if (unk.length) warn.push(`${num(unk.length)} lines (${money(unk.reduce((t, r) => t + r.sales, 0))}) at ${[...new Set(unk.map(r => r.store))].map(esc).join(', ')} have no service (Unknown Service). They load, but don't count towards customer profiles.`);
+  const sst = new Map(); for (const t of totals) { const v = sst.get(t.store) || { sales: 0, discounts: 0, orders: 0 }; v.sales += t.sales_gross; v.discounts += t.discounts; sst.set(t.store, v); }
+  const g = await uploadGate('services', grain, from, to, { stores: sst, discCol: c.disc >= 0, hard, soft, warn }, override);
   const stores = [...new Set(rows.map(r => r.store))], orders = new Set(rows.map(r => r.receipt)).size;
   say(`Sales by service and order ${fmtD(from)} – ${fmtD(to)}, ${num(orders)} orders, ${num(rows.length)} service lines. Loading…`);
-  // the same file stands in for plain Sales Incoming when it is a Monday-Sunday week or a calendar month
-  const days = Math.round((new Date(to) - new Date(from)) / 864e5) + 1, fromD = new Date(from + 'T00:00:00');
-  const grain = days === 7 && fromD.getDay() === 1 ? 'week' : (fromD.getDate() === 1 && addDays(to, 1).endsWith('-01') && days >= 28 ? 'month' : null);
   let tot = null;
   const n = await pushUpload('services', file.name, grain, from, to, stores, rows, 'ingest_order_lines', say, async uid => {
     if (!grain) return;
     const { data, error } = await sb.rpc('ingest_service_totals', { p_upload: uid, p_rows: totals }); if (error) throw error; tot = data; });
   let msg = '';
-  if (!grain) msg = ` <span class="dn">Sales totals not loaded: this file runs ${fmtD(from)} to ${fmtD(to)}. For sales, export Monday to Sunday or a whole calendar month.</span>`;
-  else if (tot) {
+  if (tot) {
     if (tot.stores_written?.length) msg += ` Sales totals loaded for ${tot.stores_written.length} store(s).`;
-    const off = (tot.checked || []).filter(x => Math.abs(x.diff) > 1);
-    if (tot.checked?.length) msg += off.length ? ` <span class="dn">Sales differ from the Sales Incoming already loaded: ${off.map(x => `${esc(x.store)} ${money(x.diff)}`).join(', ')}. Sales Incoming figures kept.</span>`
-      : ` Sales match the Sales Incoming already loaded for ${tot.checked.length} store(s).`;
+    if (tot.checked?.length) msg += ` Sales match the figures already locked for ${tot.checked.length} store(s).`;
   }
-  return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated.${msg} <span class="up">Done.</span>`;
+  return `loaded ${num(n)} service lines on ${num(orders)} orders, ${fmtD(from)} – ${fmtD(to)}. Customer service profiles updated.${msg}${warnHtml(g.warn)} Locked. <span class="up">Done.</span>`;
 }
 
 async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say, beforeFinish) {
@@ -681,7 +792,9 @@ async function adminView() {
 
   <div class="card"><h2>Stores</h2><div class="scroll"><table><tr><th>Store</th><th>Type</th><th>Active</th></tr>
     ${S.stores.map(s => `<tr><td>${esc(s.name)}</td><td>${s.channel}</td><td>${s.active ? 'Yes' : 'No'}</td></tr>`).join('')}</table></div>
-    ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>`;
+    ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>
+  <div class="card" id="locks"></div>`;
+  locksCard($('#locks'));
   $('#iRole').onchange = () => $('#iStore').hidden = $('#iRole').value !== 'store_manager';
   $('#iGo').onclick = async () => {
     const role = $('#iRole').value, email = $('#iEmail').value.trim();
@@ -697,6 +810,28 @@ async function adminView() {
   app.querySelectorAll('[data-svc]').forEach(el => el.onchange = async () => {
     const { error } = await sb.from('services').update({ channel: el.value, confirmed: true }).eq('org_id', S.org.id).eq('name', el.dataset.svc);
     if (error) alert(error.message); else { S.services.find(s => s.name === el.dataset.svc).channel = el.value; S.cache = {}; }
+  });
+}
+/* ---------- locked figures: every upload locks what it loaded; only David unlocks ---------- */
+async function locksCard(el, kind = 'sales') {
+  const [{ data: act }, { data: un }] = await Promise.all([
+    sb.from('data_locks').select('*').eq('org_id', S.org.id).eq('kind', kind).is('unlocked_at', null).order('date_to', { ascending: false }).limit(60),
+    sb.from('data_locks').select('*').eq('org_id', S.org.id).not('unlocked_at', 'is', null).order('unlocked_at', { ascending: false }).limit(10)]);
+  const what = l => l.kind === 'sales' ? `${l.grain === 'month' ? new Date(l.date_to + 'T00:00:00').toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }) : (l.grain === 'week' ? 'week ending ' : '') + fmtD(l.date_to)}` : `${fmtD(l.date_from)} – ${fmtD(l.date_to)}`;
+  el.innerHTML = `<h2>Locked figures <small>${kind === 'sales' ? 'sales by week and month' : 'customer orders'}</small></h2>
+    <div class="row"><button class="btn ${kind === 'sales' ? '' : 'ghost'}" data-lk="sales">Sales</button><button class="btn ${kind === 'orders' ? '' : 'ghost'}" data-lk="orders">Customer orders</button></div>
+    <p class="note">Every upload locks the period it loaded, so a report on an old week always shows the same figures. An upload that would change a locked period is refused. ${S.platform ? 'Unlock a period only to reload it on purpose; the next clean upload locks it again.' : 'Only David can unlock a period.'}</p>
+    <div class="scroll"><table><tr><th>Period</th><th>Locked</th><th>How</th>${S.platform ? '<th>Unlock</th>' : ''}</tr>
+    ${(act || []).map(l => `<tr><td>${what(l)}${l.kind === 'sales' ? ` <span class="chip">${l.grain}</span>` : ''}</td><td>${new Date(l.locked_at).toLocaleDateString('en-AU')}</td><td class="mu">${esc(l.note || 'upload')}</td>
+      ${S.platform ? `<td><input data-why="${l.id}" placeholder="reason" style="width:160px"> <button class="btn ghost" data-unlock="${l.id}">Unlock</button></td>` : ''}</tr>`).join('')}
+    </table></div>
+    ${(un || []).length ? `<h3 style="margin-top:12px">Recently unlocked</h3><div class="scroll"><table><tr><th>Period</th><th>Unlocked</th><th>Reason</th></tr>${un.map(l => `<tr><td>${l.kind}: ${what(l)}</td><td>${new Date(l.unlocked_at).toLocaleString('en-AU')}</td><td>${esc(l.unlock_reason || '')}</td></tr>`).join('')}</table></div>` : ''}`;
+  el.querySelectorAll('[data-lk]').forEach(b => b.onclick = () => locksCard(el, b.dataset.lk));
+  el.querySelectorAll('[data-unlock]').forEach(b => b.onclick = async () => {
+    const why = el.querySelector(`[data-why="${b.dataset.unlock}"]`).value.trim();
+    if (!why) { alert('Give a reason for unlocking.'); return; }
+    const { error } = await sb.rpc('unlock_period', { p_lock: b.dataset.unlock, p_reason: why });
+    if (error) alert(error.message); else locksCard(el, kind);
   });
 }
 const roleName = r => ({ org_admin: 'Admin', store_manager: 'Store manager', va: 'Uploads only', platform: 'Owner' }[r] || r);

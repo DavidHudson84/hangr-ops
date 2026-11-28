@@ -119,3 +119,24 @@ Owner David Hudson, not a coder. Australian spelling. Plan: AIOS `plans/2026-11-
 
 
 **Two weekly reports, not three (28 Nov 2026, migration 0008).** A Sales Incoming by service and order upload covering Monday to Sunday or a whole calendar month also fills `sales` (per-service totals, via `ingest_service_totals`), so plain Sales Incoming is retired. It never overwrites a period plain Sales Incoming already loaded; there it compares and the Upload screen shows any difference. The report has no discounts column, so `sales.discounts` is 0 for weeks it loads (not shown on any screen). It includes Master Textile Restoration, which plain Sales Incoming left out. A Sun-Sat or other odd period loads profiles only.
+
+## Upload checks and locked periods (28 Nov 2026, migration 0009)
+
+Nothing loads unless the file is clean. `uploadGate()` in app.js runs before any write and sorts problems into
+**hard** (wrong for everyone: wrong report or grouping, not Monday-Sunday / whole month, period not finished,
+Include discounts not ticked, tabs from different runs, orders missing from Flat, order lines not adding up to
+their service line / services to their store line / stores to the Total line, no Total line, unknown store,
+or a **locked** period whose figures differ) and **soft** (looks wrong: a store that traded in the prior 9 weeks
+is missing, a store more than 50% off its 4-week average (40% off 3 months for a month file), every store $0
+discounts, Customer Orders more than 15% off that period's sales or uploaded before the sales file, plain Sales
+Incoming at all). Soft stops tell the VA to send David a screenshot; the platform owner gets "load anyway".
+Unknown Service lines are only a note. Facts come from the `upload_check` RPC (existing figures, lock, 4-period
+history, expected stores, period sales).
+
+**Locks.** `data_locks` (kind sales by grain+period_end, or orders by date range). `upload_finish` locks what each
+upload loaded; everything loaded before 28 Nov was locked per week, month and order month. Rule: data already in a
+locked period can't change; an empty slot in a locked range can still be filled (so backfill works). Enforced in the
+database too: `upload_begin` refuses orders over a locked range that holds orders, `ingest_sales` refuses locked
+periods, `ingest_service_totals` only compares. `unlock_period(lock, reason)` is platform-owner only (Admin >
+Locked figures); the next clean upload re-locks. Order lines (service profiles) are not locked: they replace by
+receipt. Routing: Customer Orders also has a Flat tab and a Service column; it is recognised by First/Last Order.
