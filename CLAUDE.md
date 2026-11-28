@@ -179,3 +179,20 @@ reads nothing (checked: 0 customers at aal1, 28,002 at aal2). Emergency switch, 
 `update app.security_settings set require_mfa = false`. Loader-key scripts and pg_cron jobs are unaffected.
 Auth emails go through Resend SMTP (key "hangr-ops sign-in emails", send-only, hangr.au) set in the Supabase
 dashboard; steps in AIOS `outputs/hangr-ops/supabase-sign-in-setup.md`.
+
+## Discounts and marketing attribution (28 Nov 2026, migrations 0018-0019)
+
+Third weekly upload: My Clean POS **Coupons and Discounts** (Paid + Active ticked, grouped Store > Discount > Order;
+title "COUPONS AND DISCOUNTS"). `loadDiscounts()` keeps only orders with a discount (FreeFlow lists every paid order,
+mostly $0) into `discount_lines` (receipt, discount name, $ off, order value, pieces, start date, status, employee;
+period = the paid week/month). The POS's own subtotals for percentage discounts are wrong (multiplied by the number of
+orders), so totals come from the lines; completeness checks are pieces per discount, line count for named discounts,
+receipt links and the Total row. Locked like sales (`data_locks` kind 'discounts'). `discount_types` (Admin >
+Discounts, readable by uploaders) says what each POS discount is for; seeded DRAFT: "$10 off for SMS" marketing,
+"VIP SHIRTS 30% Discount" loyalty, "FreeFlow Discount" counter. `v_sms_outcomes`: every text (sent or held back) gets
+a window (`sms_settings.attribution_days`: offers 14, win-back/lapsing 21, welcome 28, uncollected 7) cut short at the
+customer's next text so no sale counts twice; orders/sales from Customer Orders; redemptions = a marketing discount on
+one of the customer's receipts (via order_lines) in the window. Marketing > Queue & results: extra sales vs hold-back
+(20+ held back), return per $1 of SMS, Discounts used (`discount_report`). Customer page: Marketing history.
+Deploy rule learnt the hard way: run `node --check` on all six scripts concatenated, and only push if it passes
+(`set -e`), never chain a push after a heredoc.
