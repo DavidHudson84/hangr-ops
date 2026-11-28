@@ -22,17 +22,19 @@ const OVERHEAD = [['plant_shared', 'Plant shared'], ['delivery', 'Plant delivery
 const LB_FROM = '2025-11-23';
 const DRAPR_FROM = '2026-07-19'; // Drapr in full use from this week; earlier weeks show Xero only
 const wpct = (a, b) => b ? a / b : null;
+const GST = 1.1; // POS Sales Incoming is GST inclusive; every labour ratio uses ex-GST work value (Xero is already ex GST)
 const wTxt = (p, warn = .30, bad = .35) => p == null || !isFinite(p) ? '<span class="mu">–</span>' : `<span class="${p >= bad ? 'dn' : p >= warn ? '' : 'up'}" style="${p >= warn && p < bad ? 'color:var(--warn)' : ''}">${(p * 100).toFixed(1)}%</span>`;
 
 async function lbData() {
   if (S.cache.lb) return S.cache.lb;
-  const [lw, sw, fin] = await Promise.all([
+  const [lw, sw, fin, xw] = await Promise.all([
     all(() => sb.from('v_labour_week').select('*').eq('org_id', S.org.id).gte('week_end', LB_FROM)),
     all(() => sb.from('v_sales_week').select('store_id,service,sales_gross,orders,pieces,week_end').gte('week_end', LB_FROM)),
-    all(() => sb.from('fin_weekly').select('*').eq('org_id', S.org.id).gte('week_end', LB_FROM))]);
+    all(() => sb.from('fin_weekly').select('*').eq('org_id', S.org.id).gte('week_end', LB_FROM)),
+    all(() => sb.from('v_work_value_week').select('*').eq('org_id', S.org.id).gte('week_end', LB_FROM))]);
   const svcSec = Object.fromEntries(S.services.map(s => [s.name, s.section]));
   const svcCh = Object.fromEntries(S.services.map(s => [s.name, s.channel]));
-  return S.cache.lb = { lw, sw, fin, svcSec, svcCh };
+  return S.cache.lb = { lw, sw, fin, xw, svcSec, svcCh };
 }
 const lastSunday = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 7) % 7 || 7)); return iso(d); };
 
@@ -56,12 +58,13 @@ function plantWeek(d, wk) {
   const lab = d.lw.filter(r => r.week_end === wk);
   const L = secs => lab.filter(r => secs.includes(r.section) && (!r.store_id || r.section !== 'delivery')).reduce((a, r) => ({ h: a.h + +r.hours, c: a.c + +(r.cost || 0) }), { h: 0, c: 0 });
   const sales = {}, pieces = {};
-  for (const r of d.sw) if (r.week_end === wk) { const s = d.svcSec[r.service]; if (!s || s === 'none') continue; sales[s] = (sales[s] || 0) + +r.sales_gross; pieces[s] = (pieces[s] || 0) + +r.pieces; }
+  for (const r of d.sw) if (r.week_end === wk) { const s = d.svcSec[r.service]; if (!s || s === 'none') continue; sales[s] = (sales[s] || 0) + +r.sales_gross / GST; pieces[s] = (pieces[s] || 0) + +r.pieces; }
   const restX = d.fin.find(f => f.week_end === wk && f.stream === 'restoration' && f.source === 'xero');
   const rows = STREAMS.map(([k, name, secs]) => {
     const l = L(secs); let s = sales[k] || 0;
     if (k === 'restoration') s += restX ? +restX.amount : 0;
-    return { k, name, h: l.h, c: l.c, sales: s, pieces: pieces[k] || 0 };
+    const x = d.xw.find(v => v.week_end === wk && v.stream === k), xa = x ? +x.amount : 0;
+    return { k, name, h: l.h, c: l.c, sales: s + xa, xero: xa, xest: !!x?.estimated, pieces: pieces[k] || 0 };
   });
   const over = OVERHEAD.map(([k, name]) => { const l = L([k]); return { k, name, h: l.h, c: l.c }; });
   const totS = rows.reduce((a, r) => a + r.sales, 0), totC = rows.reduce((a, r) => a + r.c, 0) + over.reduce((a, r) => a + r.c, 0);
@@ -85,19 +88,19 @@ async function lbPlant(el, wkSel) {
   ${!P.hasSales ? `<div class="card" style="border-color:#f3c5c0"><b>No POS sales loaded for this week.</b> Labour is current, but Sales Incoming is only loaded to ${fmtD(lastSales)}, so pieces per hour and wage % show for weeks up to then. Once the VA uploads the missing weeks they fill in here.</div>` : ''}
   <div class="tiles">
     <div class="tile"><div class="l">Plant labour</div><div class="v">${money(P.totC)}</div><div class="d mu">${num(P.totH)} hours</div></div>
-    <div class="tile"><div class="l">Plant work value</div><div class="v">${P.hasSales ? money(P.totS) : '–'}</div><div class="d mu">POS sales by service + restoration billed in Xero</div></div>
+    <div class="tile"><div class="l">Plant work value</div><div class="v">${P.hasSales ? money(P.totS) : '–'}</div><div class="d mu">ex GST: POS sales by service + restoration and linen billed in Xero</div></div>
     <div class="tile"><div class="l">Plant wage %</div><div class="v">${P.hasSales ? wTxt(wpct(P.totC, P.totS)) : '–'}</div><div class="d mu">includes shared, delivery and office</div></div>
   </div>
   <div class="card" style="margin-top:14px"><h2>By work stream <small>week ending ${fmtD(wk)}; arrows compare with the prior 12 weeks that have sales</small></h2><div class="scroll"><table>
     <tr><th>Stream</th><th>Hours</th><th>Labour</th><th>Sales</th><th>Pieces</th><th>Pieces / hr</th><th>12-wk avg</th><th>Labour / piece</th><th>Wage %</th><th>12-wk avg</th></tr>
     ${P.rows.map(r => { const pph = r.h ? r.pieces / r.h : null, wp = wpct(r.c, r.sales);
       const aP = avgOf(r.k, x => x.h && x.pieces ? x.pieces / x.h : null), aW = avgOf(r.k, x => x.sales ? x.c / x.sales : null);
-      return `<tr><td>${esc(r.name)}</td><td>${num(r.h)}</td><td>${money(r.c)}</td><td>${r.sales ? money(r.sales) : '–'}</td><td>${r.pieces ? num(r.pieces) : '–'}</td>
+      return `<tr><td>${esc(r.name)}</td><td>${num(r.h)}</td><td>${money(r.c)}</td><td>${r.sales ? money(r.sales) : '–'}${r.xero ? `<div class="note">incl. ${money(r.xero)} Xero linen${r.xest ? ' (Pacific est.)' : ''}</div>` : ''}</td><td>${r.pieces ? num(r.pieces) : '–'}</td>
         <td>${r.pieces && pph ? pph.toFixed(1) : '–'}</td><td class="mu">${aP ? aP.toFixed(1) : '–'}</td><td>${r.pieces ? money(r.c / r.pieces, 2) : '–'}</td><td>${wTxt(wp)}</td><td>${wTxt(aW)}</td></tr>`; }).join('')}
     ${P.over.map(r => `<tr><td class="mu">${esc(r.name)}</td><td>${num(r.h)}</td><td>${money(r.c)}</td><td colspan="5" class="note" style="text-align:left">shared cost, counted in the plant total</td><td>${wTxt(wpct(r.c, P.totS), .05, .08)}</td><td></td></tr>`).join('')}
     <tr class="tot"><td>Plant total</td><td>${num(P.totH)}</td><td>${money(P.totC)}</td><td>${money(P.totS)}</td><td></td><td></td><td></td><td></td><td>${wTxt(wpct(P.totC, P.totS))}</td><td></td></tr>
   </table></div>
-  <p class="note">Pieces for wash & fold are counted the way the POS counts them (bags and kilos in some services), so compare that row with itself over time rather than with the others. Restoration sales are what Xero billed that week (Steamatic, Coathanger, Linx, private), so the week can swing with invoicing.</p></div>
+  <p class="note">Pieces for wash & fold are counted the way the POS counts them (bags and kilos in some services), so compare that row with itself over time rather than with the others. Sales are ex GST. Wash & fold also counts the linen and uniform customers billed straight from Xero (Frog, Kempe, Little Ginger, Seaview, The Views, Westgate, Pacific Meats); Pacific is invoiced monthly, so its month is spread by day, and a month not yet invoiced uses the previous month's rate (marked est.) until the invoice lands. Restoration sales are what Xero billed that week (Steamatic, Coathanger, Linx, private), so the week can swing with invoicing.</p></div>
   <div class="card"><h2>Plant wage % by week</h2><div class="scroll"><table>
     <tr><th>Week ending</th><th>Labour</th><th>Hours</th><th>Work value</th><th>Wage %</th>${STREAMS.map(s => `<th>${esc(s[1].split(' (')[0].split(',')[0])}</th>`).join('')}</tr>
     ${trend.slice().reverse().map(t => `<tr><td>${fmtD(t.w)}</td><td>${money(t.totC)}</td><td>${num(t.totH)}</td><td>${money(t.totS)}</td><td>${wTxt(wpct(t.totC, t.totS))}</td>${t.rows.map(r => `<td>${wTxt(wpct(r.c, r.sales))}</td>`).join('')}</tr>`).join('')}
@@ -116,7 +119,7 @@ async function lbStores(el, wkSel) {
   const row = (s, w) => {
     const lab = d.lw.filter(r => r.week_end === w && r.store_id === s.id);
     const c = lab.reduce((a, r) => a + +(r.cost || 0), 0), h = lab.reduce((a, r) => a + +r.hours, 0), sal = lab.reduce((a, r) => a + +(r.salaried_cost || 0), 0);
-    const sales = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross, 0);
+    const sales = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.sales_gross / GST, 0);
     const orders = d.sw.filter(r => r.week_end === w && r.store_id === s.id && d.svcCh[r.service] === 'retail').reduce((a, r) => a + +r.orders, 0);
     return { c, h, sal, sales, orders };
   };
@@ -124,7 +127,7 @@ async function lbStores(el, wkSel) {
   el.innerHTML = `
   <div class="row" style="margin-bottom:12px"><span class="sp"></span>${lbWeekPicker(weeksList, wk, '#/labour/stores/')}</div>
   <div class="card"><h2>Stores <small>week ending ${fmtD(wk)}: counter, alterations and store delivery labour against the store's retail sales</small></h2><div class="scroll"><table>
-    <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales</th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
+    <tr><th>Store</th><th>Hours worked</th><th>Rostered</th><th>Labour</th><th>of which salaried</th><th>Retail sales ex GST</th><th>Wage %</th><th>12-wk wage %</th><th>Orders / labour hr</th></tr>
     ${stores.map(s => { const r = row(s, wk);
       const rost = (roster || []).filter(x => locStore[x.eh_location_id] === s.id).reduce((a, x) => a + +x.hours, 0);
       const pw = salesWeeks.filter(w => w <= wk).slice(-12).map(w => row(s, w)).filter(x => x.sales);
@@ -286,7 +289,7 @@ async function lbRoster(el, wkSel) {
     <tr><td>Hours needed by day (normal pace)</td>${[1, 2, 3, 4, 5, 6].map(d => { if (d === 6) return `<td class="mu">as now</td>`; const prev = d === 1 ? (+intake[5] || 0) + (+intake[6] || 0) + (+intake[7] || 0) : (+intake[d - 1] || 0); return `<td>${hrs(needN * prev / 100)}</td>`; }).join('')}</tr>
   </table></div><p class="note">Work dropped off one day is mostly processed the next, so "hours needed by day" follows the previous working day's intake (Friday to Sunday drop-offs land on Monday; Saturday stays as it is now). Commercial work isn't in the intake split yet. Shared, delivery and office hours are on top.</p></div>
   <div class="card"><h2>Stores, week of ${fmtD(P.week_start)} <small>counter hours the forecast sales can carry at ${T.store_wage_pct ?? 25}% against the Employment Hero roster</small></h2><div class="scroll"><table>
-    <tr><th>Store</th><th>Forecast retail sales</th><th>Rostered (EH)</th><th>Worked, avg 4 wks</th><th>Affordable at ${T.store_wage_pct ?? 25}%</th><th>Roster over (+) / under</th><th>$ a week</th></tr>
+    <tr><th>Store</th><th>Forecast retail sales ex GST</th><th>Rostered (EH)</th><th>Worked, avg 4 wks</th><th>Affordable at ${T.store_wage_pct ?? 25}%</th><th>Roster over (+) / under</th><th>$ a week</th></tr>
     ${stores.map(r => { const base = r.rostered ?? r.h4; return `<tr><td>${esc(r.name)}${r.salaried ? `<div class="note">after ${money(r.salaried)} a week of salaried cost</div>` : ''}</td><td>${money(r.sales_fc)}</td><td>${r.rostered != null ? hrs(r.rostered) : '<span class="mu">not rostered yet</span>'}</td><td>${hrs(r.h4)}</td><td><b>${hrs(r.affordable)}</b></td><td>${diff(+base, +r.affordable)}</td><td>${r.cph ? money((base - r.affordable) * r.cph) : '–'}</td></tr>`; }).join('')}
   </table></div><p class="note">Where the week isn't rostered yet, the comparison uses the 4-week average worked. Stores need minimum cover to open, so treat "under" as room, not a target. Hours here are clocked hours; salaried pay is taken off the budget first.</p></div>
   <div class="card"><h2>Standards</h2><div class="row">

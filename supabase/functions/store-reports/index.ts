@@ -42,7 +42,8 @@ function build(r: R, opts: { labour: boolean }) {
   const movers = svc.filter(s => s.avg12 > 50).map(s => ({ ...s, d: s.sales - s.avg12 })).sort((a, b) => b.d - a.d);
   const lift = movers[0], drop = movers[movers.length - 1];
   const c = r.customers || {}, a = r.accounts, lab = opts.labour ? r.labour : null;
-  const wage = lab ? lab.cost / cur.sales * 100 : null, wage12 = lab ? lab.cost12 / cur.avg12 * 100 : null;
+  // wages against ex-GST sales (the sales shown stay GST inclusive, as the POS reports them)
+  const wage = lab ? lab.cost / (cur.sales / 1.1) * 100 : null, wage12 = lab ? lab.cost12 / (cur.avg12 / 1.1) * 100 : null;
 
   const insight: [string, string][] = [
     ['Week on week', `${money(cur.sales)}, ${pW! >= 0 ? 'up' : 'down'} ${money(Math.abs(cur.sales - prev.sales))} (${pctTxt(pW)}) on last week's ${money(prev.sales)}.`],
@@ -54,7 +55,7 @@ function build(r: R, opts: { labour: boolean }) {
   if (lift && drop && lift !== drop) insight.push(['Services', `${esc(lift.service)} had the biggest lift on its 12-week average (${lift.d >= 0 ? '+' : '−'}${money(Math.abs(lift.d))}); ${esc(drop.service)} the biggest drop (${drop.d >= 0 ? '+' : '−'}${money(Math.abs(drop.d))}).`]);
   if (c.orders) insight.push(['Customers', `${c.customers} customers placed ${c.orders} orders. ${c.new} were new, and ${c.returning_lapsed} came back after six months or more away.`]);
   if (a && a.account_sales > 0) insight.push(['On account', `${money(a.account_sales)} of the week was account work${a.top?.length ? ` (${a.top.slice(0, 3).map((t: R) => `${esc(t.name)} ${money(t.sales, 0)}`).join(', ')})` : ''}; walk-in customers ${money(a.walkin_sales)}.`]);
-  if (lab) insight.push(['Counter wages', `${money(lab.cost)} for ${lab.hours} hours, ${wage!.toFixed(1)}% of sales (12-week ${wage12!.toFixed(1)}%).`]);
+  if (lab) insight.push(['Counter wages', `${money(lab.cost)} for ${lab.hours} hours, ${wage!.toFixed(1)}% of sales ex GST (12-week ${wage12!.toFixed(1)}%).`]);
 
   const tile = (label: string, big: string, sub: string) => `<td valign="top" style="width:50%;padding:6px"><div style="border:1px solid ${LINE};border-radius:10px;padding:14px">
     <div style="color:${MUTE};font-size:13px">${label}</div><div style="font-size:24px;font-weight:700;color:${INK};margin:4px 0">${big}</div><div style="font-size:13px">${sub}</div></div></td>`;
@@ -103,7 +104,7 @@ function build(r: R, opts: { labour: boolean }) {
   ${h2('Services this week', 'Against each service’s own average over the last 12 weeks')}
   ${table(th('Service', false) + th('Sales') + th('vs 12-wk avg') + th('Pieces') + th('Per piece') + th('Share'), top.map(svcRow).join('') + restRow
     + `<tr style="font-weight:700">${cell('All services')}${num(money(svcTot))}${num('')}${num(String(svc.reduce((t, s) => t + (s.pieces || 0), 0)))}${num('')}${num('100%')}</tr>`)}
-  <p style="color:${MUTE};font-size:12px;margin-top:26px;line-height:1.5"><b>How the numbers work.</b> Sales are My Clean POS Sales Incoming for the store, Monday to Sunday, after discounts and including GST. The 12-week average is the last 12 weeks including this one. “Last year” is the same week 52 weeks earlier. Every change is measured against the earlier figure.${lab ? ' Counter wages are Employment Hero hours at each person’s cost per hour (wages and super), without WorkCover.' : ''} Figures are locked once loaded, so this report won’t change later.</p>
+  <p style="color:${MUTE};font-size:12px;margin-top:26px;line-height:1.5"><b>How the numbers work.</b> Sales are My Clean POS Sales Incoming for the store, Monday to Sunday, after discounts and including GST. The 12-week average is the last 12 weeks including this one. “Last year” is the same week 52 weeks earlier. Every change is measured against the earlier figure.${lab ? ' Counter wages are Employment Hero hours at each person’s cost per hour (wages and super), without WorkCover, as a share of sales ex GST.' : ''} Figures are locked once loaded, so this report won’t change later.</p>
   <p style="font-size:13px"><a href="${APP}#/store/${esc(r.store_code || '')}/${r.week_end}" style="color:${BLUE}">Open ${esc(r.store)} in Hangr Ops</a></p>
   </div></body></html>`;
   const subject = `${r.store} weekly sales, w/e ${dShort(r.week_end)}: ${money(cur.sales, 0)} (${pctTxt(pW)} on last week, ${pctTxt(pY)} on last year)`;
