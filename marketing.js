@@ -290,6 +290,8 @@ async function mkSettings(el) {
       <div><label>Days before the same service can be offered again</label><input id="sRep" type="number" value="${s.service_repeat_days ?? 350}" style="width:80px"></div>
       <div><label>Intro after the greeting (every text)</label><input id="sHead" value="${esc(s.header || '')}" style="width:300px" placeholder="David from Master Dry Cleaners here."></div>
       <div><label>Opt-out line</label><input id="sFoot" value="${esc(s.footer || '')}" style="width:220px"></div>
+      <div><label>Marketing starts at drop-off number</label><input id="sVis" type="number" min="1" max="10" value="${s.marketing_min_visits ?? 3}" style="width:70px"></div>
+      <div><label>…for customers who first came in within (days, 0 = everyone)</label><input id="sNew" type="number" min="0" value="${s.marketing_new_days ?? 120}" style="width:80px"></div>
       <div><label>Days between the six offer waves (0 = all at once)</label><input id="sWave" type="number" min="0" max="14" value="${s.offer_wave_days ?? 1}" style="width:80px"></div></div>
     <p class="note">Never on Sundays. ${money(s.cost_per_sms, 3)} per SMS part.</p>
     <div class="row"><button class="btn" id="sSave">Save</button><span id="sMsg" class="note"></span></div></div>`;
@@ -297,7 +299,7 @@ async function mkSettings(el) {
   $('#sSave').onclick = async () => {
     const mode = $('#sMode').value;
     if (mode === 'live' && s.mode !== 'live' && !confirm('Turn on live sending? Everything queued and due will start going to customers within 5 minutes (sending hours only).')) return;
-    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, service_repeat_days: +$('#sRep').value || 350, offer_wave_days: Math.max(0, Math.min(14, +$('#sWave').value || 0)), header: $('#sHead').value.trim(), footer: $('#sFoot').value.trim() || 'Reply STOP to opt out.', updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
+    const { error } = await sb.from('sms_settings').update({ mode, test_mobile: $('#sTest').value.trim() || null, sender_id: $('#sSender').value.trim(), quiet_start: $('#sStart').value, quiet_end: $('#sEnd').value, marketing_cap_per_month: +$('#sCap').value, control_pct: +$('#sCtl').value, referral_credit: +$('#sRef').value || 0, service_repeat_days: +$('#sRep').value || 350, offer_wave_days: Math.max(0, Math.min(14, +$('#sWave').value || 0)), header: $('#sHead').value.trim(), marketing_min_visits: Math.max(1, +$('#sVis').value || 3), marketing_new_days: Math.max(0, +$('#sNew').value || 0), footer: $('#sFoot').value.trim() || 'Reply STOP to opt out.', updated_at: new Date().toISOString() }).eq('org_id', S.org.id);
     $('#sMsg').innerHTML = error ? `<span class="err">${esc(error.message)}</span>` : 'Saved.'; if (!error) marketingView('settings');
   };
 }
