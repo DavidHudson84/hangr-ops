@@ -35,7 +35,7 @@ async function mkOffers(el) {
   // which offer each group gets in a period (same rule as app.offer_slot)
   const slotFor = (i, g) => ((i + g) % 6) + 1;
   el.innerHTML = `<div class="card"><h2>How it works</h2>
-    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in four waves by surname so the plant isn't hit at once. 10% are held back to measure what each offer won. Customers whose average ticket is under the cut-off get the low-spender offer every period instead. Nothing is queued until you approve a period.</p></div>
+    <p class="note">Customers are split into six fixed groups. Each period every group gets a different offer from the six below, and each period the groups move on to the next offer, so six offers are always running at once and nobody gets the same offer twice in a row. Within a period, texts go out in six waves about 8 days apart, one group and one offer per wave, so the plant knows which service is coming and each wave's response can be read before the next. 10% are held back to measure what each offer won. Customers whose average ticket is under the cut-off get the low-spender offer every period instead. Nothing is queued until you approve a period.</p></div>
   <div class="card"><h2>The six offers</h2>
     ${(lib || []).map(o => `<div class="card" style="margin:10px 0" id="ol-${o.slot}">
       <div class="row"><b>Offer ${o.slot}: </b><input data-name value="${esc(o.name)}" style="flex:1;max-width:420px"><span class="note">${esc(o.note || '')}</span></div>
