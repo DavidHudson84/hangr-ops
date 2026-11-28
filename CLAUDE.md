@@ -140,3 +140,22 @@ database too: `upload_begin` refuses orders over a locked range that holds order
 periods, `ingest_service_totals` only compares. `unlock_period(lock, reason)` is platform-owner only (Admin >
 Locked figures); the next clean upload re-locks. Order lines (service profiles) are not locked: they replace by
 receipt. Routing: Customer Orders also has a Flat tab and a Service column; it is recognised by First/Last Order.
+
+## Monday store reports (28 Nov 2026, migrations 0010-0012)
+
+One email per store (Albert Park, Seddon, Werribee, Butler, Route, South Kingsville) for the week just finished,
+modelled on Huward's "Summary Report for Weekly Average Sales" PDF: sales vs last week / same week last year /
+12-week average (incl. this week) and its run of weeks rising or falling, discounts vs 12-week average, key points,
+all stores side by side, the 12 weeks with bars against last year, services this week vs each service's 12-week
+average, customers (Customer Orders: served, new, back after 6+ months), on-account vs walk-in from order_lines
+(e.g. DRYZ at Butler), and counter wages % for shopfronts (v_labour_daily section store_service; per-schedule toggle).
+Figures match Huward's PDF to the cent; Butler includes DRYZ (shown as account work) where his excludes it.
+
+Pieces: `store_week_report(store, week)` (service_role or org admin only), `report_schedules` (recipients, send day,
+send-after time, on/off, include wages; Admin > Monday store reports, with Preview and "Send me a test"),
+`report_runs` (log), `reports_due()` (enabled, on/after send day+time and up to 2 days late, the week's sales locked
+and a Customer Orders upload covering the week, not yet sent), `reports_waiting()` (Tuesday 12pm, one note to David).
+Edge Function `store-reports` (verify_jwt off; modes cron/render need `app.report_settings.cron_secret`,
+preview/test need an admin login). pg_cron `hangr-store-reports` every 15 min. Sent through Resend from
+reports@hangr.au (domain verified), reply-to David; the key lives in `app.report_settings.resend_key`, never the repo.
+All six schedules start OFF with only David as recipient.
