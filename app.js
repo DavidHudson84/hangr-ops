@@ -815,7 +815,7 @@ async function adminView() {
   });
 }
 /* ---------- Monday store reports: who gets which store, and when ---------- */
-const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const REPORT_DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 async function reportsCard(el) {
   const [{ data: sch }, { data: runs }] = await Promise.all([
     sb.from('report_schedules').select('*').eq('org_id', S.org.id),
@@ -829,7 +829,7 @@ async function reportsCard(el) {
     ${rows.map(r => { const l = last(r.store_id); return `<tr data-sch="${r.id}">
       <td><b>${esc(name(r.store_id))}</b></td>
       <td><input data-f="to" value="${esc((r.recipients || []).join(', '))}" style="width:280px"></td>
-      <td><select data-f="dow">${DOW.map((d, i) => `<option value="${i}" ${i === r.send_dow ? 'selected' : ''}>${d}</option>`).join('')}</select></td>
+      <td><select data-f="dow">${REPORT_DOW.map((d, i) => `<option value="${i}" ${i === r.send_dow ? 'selected' : ''}>${d}</option>`).join('')}</select></td>
       <td><input data-f="at" type="time" value="${String(r.send_after).slice(0, 5)}" style="width:100px"></td>
       <td><input data-f="lab" type="checkbox" ${r.include_labour ? 'checked' : ''}></td>
       <td><input data-f="on" type="checkbox" ${r.enabled ? 'checked' : ''}></td>
