@@ -66,7 +66,7 @@ async function accountsView(filter = 'commercial') {
     app.querySelectorAll('[data-note]').forEach(e => e.onchange = () => save(e.dataset.note, { note: e.value.trim() || null }));
   };
   app.innerHTML = `
-  <div class="row" style="margin-bottom:12px"><h2 style="margin:0;font-size:18px">Account health</h2><span class="sp" style="flex:1"></span>
+  <div class="row ph"><h1 class="pt"><small>Accounts</small>Account health</h1><span class="sp"></span>
     <select id="fStream"><option value="commercial">Commercial</option><option value="restoration">Restoration</option><option value="dr_drapes">Dr Drapes</option><option value="all">All streams</option></select>
     <select id="fOwner"><option value="">Every owner</option>${owners.map(o => `<option>${esc(o)}</option>`).join('')}<option>(none)</option></select>
     <select id="fStatus"><option value="">Every status</option>${ACC_ORDER.map(k => `<option value="${k}">${ACC_STATUS[k][0]}</option>`).join('')}</select>

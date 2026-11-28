@@ -69,29 +69,76 @@ async function setOrg(org) {
     sb.from('services').select('*').eq('org_id', org.id)]);
   S.stores = st.data || []; S.services = sv.data || [];
   const sel = $('#orgSel');
-  sel.hidden = S.orgs.length < 2;
+  sel.hidden = S.orgs.length < 2; $('#orgName').textContent = S.orgs.length < 2 ? org.name : '';
   sel.innerHTML = S.orgs.map(o => `<option value="${o.id}" ${o.id === org.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
   sel.onchange = async () => { await setOrg(S.orgs.find(o => o.id === sel.value)); location.hash = '#/'; route(); };
   buildNav();
 }
 
-function buildNav() {
-  const links = [];
-  if (isAdmin()) links.push(['#/group', 'Group']);
-  myStores().filter(s => s.active).forEach(s => links.push([`#/store/${s.code}`, s.name]));
-  if (isAdmin() || myStores().length) links.push(['#/customers', 'Customers']);
-  if (isAdmin()) links.push(['#/accounts', 'Accounts']);
-  if (isAdmin()) links.push(['#/marketing', 'Marketing']);
-  if (isAdmin()) links.push(['#/labour', 'Labour']);
-  if (canUpload()) links.push(['#/upload', 'Upload']);
-  if (isAdmin()) links.push(['#/admin', 'Admin']);
-  $('#nav').innerHTML = links.map(([h, t]) => `<a href="${h}">${esc(t)}</a>`).join('');
+const ICON = {
+  group: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  store: '<path d="M4 10v10h16V10M3 10l2-6h14l2 6zM9.5 20v-5h5v5"/>',
+  customers: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M21.5 20a6.5 6.5 0 0 0-4-6"/>',
+  accounts: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8.5 7V5.5A1.5 1.5 0 0 1 10 4h4a1.5 1.5 0 0 1 1.5 1.5V7M3 12.5h18"/>',
+  marketing: '<path d="M4 10v4a1 1 0 0 0 1 1h2.5l6 4V5l-6 4H5a1 1 0 0 0-1 1z"/><path d="M17 9a4 4 0 0 1 0 6M19.5 6.5a7.5 7.5 0 0 1 0 11"/>',
+  labour: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/>',
+  admin: '<path d="M4 6.5h9M17 6.5h3M4 12h3M11 12h9M4 17.5h11M19 17.5h1"/><circle cx="15" cy="6.5" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17.5" r="2"/>'
+};
+const ico = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
+// Marketing and Labour pages, grouped for the sidebar. Keys match MK_TABS / LB_TABS.
+const MK_GROUPS = [['Results', ['report', 'results', 'checks']], ['Campaigns', ['offers', 'flows', 'programs', 'campaigns', 'test']], ['Loyalty', ['loyalty', 'referrals', 'reviews']], ['Setup', ['templates', 'optouts', 'settings']]];
+const LB_GROUPS = [['Performance', ['plant', 'stores', 'repairs', 'drdrapes']], ['Planning', ['roster', 'org']], ['Setup', ['sections']]];
+const ADMIN_TABS = [['people', 'People'], ['services', 'Services'], ['stores', 'Stores'], ['discounts', 'Discounts'], ['reports', 'Monday reports'], ['locks', 'Locked figures']];
+const grouped = (base, tabs, groups) => groups.map(([g, keys]) => ({ grp: g, items: keys.map(k => [`${base}/${k}`, (tabs.find(t => t[0] === k) || [k, k])[1]]) }));
+
+function navModel() {
+  const m = [];
+  if (isAdmin()) m.push({ key: 'group', label: 'Group', href: '#/group', match: ['#/group'] });
+  const st = myStores().filter(s => s.active);
+  if (st.length === 1 && !isAdmin()) m.push({ key: 'store', label: st[0].name, href: `#/store/${st[0].code}`, match: ['#/store'] });
+  else if (st.length) m.push({ key: 'store', label: 'Stores', href: `#/store/${st[0].code}`, match: ['#/store'], kids: [{ items: st.map(s => [`#/store/${s.code}`, s.name]) }] });
+  if (isAdmin() || st.length) m.push({ key: 'customers', label: 'Customers', href: '#/customers', match: ['#/customers', '#/customer'] });
+  if (isAdmin()) m.push({ key: 'accounts', label: 'Accounts', href: '#/accounts', match: ['#/accounts'] });
+  if (isAdmin()) m.push({ key: 'labour', label: 'Labour', href: '#/labour/plant', match: ['#/labour'], def: '#/labour/plant', alias: { '#/labour/role': '#/labour/org' }, kids: grouped('#/labour', LB_TABS, LB_GROUPS) });
+  if (isAdmin()) m.push({ key: 'marketing', label: 'Marketing', href: '#/marketing/offers', match: ['#/marketing'], def: '#/marketing/offers', kids: grouped('#/marketing', MK_TABS, MK_GROUPS) });
+  if (canUpload()) m.push({ key: 'upload', label: 'Upload', href: '#/upload', match: ['#/upload'] });
+  if (isAdmin()) m.push({ key: 'admin', label: 'Admin', href: '#/admin/people', match: ['#/admin'], def: '#/admin/people', kids: [{ items: ADMIN_TABS.map(([k, t]) => [`#/admin/${k}`, t]) }] });
+  return m;
 }
+function buildNav() {
+  S.nav = navModel();
+  $('#nav').innerHTML = S.nav.map((x, i) => `<div class="sec" data-sec="${i}"><a href="${x.href}">${ico(x.key)}<span>${esc(x.label)}</span></a>
+    ${x.kids ? `<div class="kids">${x.kids.map(g => `${g.grp ? `<div class="grp">${esc(g.grp)}</div>` : ''}${g.items.map(([h, t]) => `<a href="${h}">${esc(t)}</a>`).join('')}`).join('')}</div>` : ''}</div>`).join('');
+  markNav();
+}
+// highlight the section and page for the current address; returns a label for the title bar
+function markNav() {
+  let raw = location.hash || '#/';
+  if ((raw === '#/' || raw === '#') && S.nav?.length) raw = S.nav[0].match[0];
+  const under = (h, p) => h === p || h.startsWith(p + '/');
+  let label = '';
+  document.querySelectorAll('#nav .sec').forEach(el => {
+    const x = S.nav[+el.dataset.sec], on = x.match.some(p => under(raw, p));
+    el.classList.toggle('on', on); el.classList.toggle('open', on);
+    if (on) label = x.label;
+    let h = raw === x.match[0] && x.def ? x.def : raw;
+    for (const [from, to] of Object.entries(x.alias || {})) if (under(h, from)) h = to;
+    el.querySelectorAll('.kids a').forEach(a => { const k = on && under(h, a.getAttribute('href')); a.classList.toggle('on', k); if (k) label = x.label === a.textContent ? label : `${x.label} · ${a.textContent}`; });
+  });
+  $('#mcur').textContent = label;
+  document.title = label ? `${label} · Hangr Ops` : 'Hangr Ops';
+}
+// page heading: small section name above the page name, optional things on the right
+const pageHead = (eyebrow, title, right = '') => `<div class="row ph"><h1 class="pt">${eyebrow ? `<small>${esc(eyebrow)}</small>` : ''}${title}</h1><span class="sp"></span>${right}</div>`;
+$('#burger').onclick = () => document.body.classList.toggle('navopen');
+$('#scrim').onclick = () => document.body.classList.remove('navopen');
+$('#nav').addEventListener('click', e => { if (e.target.closest('a')) document.body.classList.remove('navopen'); });
 
 function loginView(msg = '') {
   $('#hdr').hidden = true;
   app.innerHTML = `<div class="card login">
-    <h2>Hangr Ops</h2>
+    <h2>Sign in</h2>
     <form id="lf">
       <label>Email</label><input id="em" type="email" autocomplete="username" required>
       <label>Password</label><input id="pw" type="password" autocomplete="current-password" required minlength="8">
@@ -217,13 +264,13 @@ function barChart(series, key, avgKey, h = 160, note) {
   let bars = '', line = '';
   series.forEach((s, i) => {
     const bh = (s[key] / max) * (h - 24);
-    bars += `<rect x="${pad + i * bw + 1}" y="${h - 18 - bh}" width="${Math.max(1, bw - 2)}" height="${bh}" fill="#2E75B6" opacity=".85"><title>${fmtD(s.week_end)}: ${money(s[key], max < 1000 ? 2 : 0)}</title></rect>`;
+    bars += `<rect x="${pad + i * bw + 1}" y="${h - 18 - bh}" width="${Math.max(1, bw - 2)}" height="${bh}" fill="#9FB7D6" opacity=".95"><title>${fmtD(s.week_end)}: ${money(s[key], max < 1000 ? 2 : 0)}</title></rect>`;
     if (avgKey && s[avgKey] != null) line += `${line ? 'L' : 'M'}${pad + i * bw + bw / 2},${h - 18 - (s[avgKey] / max) * (h - 24)}`;
     if (i % Math.ceil(series.length / 8) === 0) bars += `<text x="${pad + i * bw}" y="${h - 4}">${fmtD(s.week_end)}</text>`;
   });
   const ticks = [0, .5, 1].map(f => `<text x="0" y="${h - 18 - f * (h - 24) + 4}">${max < 1000 ? money(max * f) : money(max * f / 1000) + 'k'}</text>`).join('');
-  return `<svg viewBox="0 0 ${W} ${h}" width="100%" role="img">${ticks}${bars}${line ? `<path d="${line}" fill="none" stroke="#1F3864" stroke-width="2"/>` : ''}</svg>
-    ${avgKey ? `<p class="note">${note || 'Bars are weekly sales; the dark line is the 12-week rolling average.'}</p>` : ''}`;
+  return `<svg viewBox="0 0 ${W} ${h}" width="100%" role="img">${ticks}${bars}${line ? `<path d="${line}" fill="none" stroke="#9A733B" stroke-width="2.2"/>` : ''}</svg>
+    ${avgKey ? `<p class="note">${note || 'Bars are weekly sales; the gold line is the 12-week rolling average.'}</p>` : ''}`;
 }
 function withRolling(series, key) {
   return series.map((s, i) => { const p = series.slice(Math.max(0, i - 11), i + 1); return { ...s, avg: p.length >= 4 ? p.reduce((a, x) => a + x[key], 0) / p.length : null }; });
@@ -274,7 +321,7 @@ async function aovCard(siSeries, wk, storeIds) {
       ${tile('vs 12-week average', money(A.avg12, 2), pctTxt(pct(A.cur, A.avg12)))}
       ${tile('vs same week last year', money(A.ly, 2), pctTxt(pct(A.cur, A.ly)))}
     </div>
-    <div style="margin-top:10px">${barChart(withRolling(aovSer, 'aov'), 'aov', 'avg', 130, 'Bars are $ per retail ticket each week; the dark line is the 12-week rolling average. Account customers are left out.')}</div>
+    <div style="margin-top:10px">${barChart(withRolling(aovSer, 'aov'), 'aov', 'avg', 130, 'Bars are $ per retail ticket each week; the gold line is the 12-week rolling average. Account customers are left out.')}</div>
     ${cur.length ? `<h2 style="margin-top:14px">Order sizes <small>retail orders, last 12 weeks of Customer Orders loaded vs the same 12 weeks a year earlier</small></h2>
     <div class="grid g2"><div class="scroll"><table>
       <tr><th>Order value</th><th>Orders</th><th>% of orders</th><th>Last year</th><th>% of sales</th></tr>
@@ -290,7 +337,7 @@ async function aovCard(siSeries, wk, storeIds) {
 /* ---------- routing ---------- */
 function route() {
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', location.hash === a.getAttribute('href') || location.hash.startsWith(a.getAttribute('href') + '/')));
+  markNav(); window.scrollTo(0, 0);
   const go = (fn, ...a) => fn(...a).catch(e => { app.innerHTML = `<div class="card err">Something went wrong: ${esc(e.message || e)}</div>`; console.error(e); });
   if (h[0] === 'store' && h[1]) return go(storeView, h[1], h[2]);
   if (h[0] === 'upload' && canUpload()) return go(uploadView);
@@ -299,7 +346,7 @@ function route() {
   if (h[0] === 'labour' && isAdmin()) return go(labourView, h[1], h[2]);
   if (h[0] === 'customers') return go(customersView, h[1] ? decodeURIComponent(h[1]) : '');
   if (h[0] === 'customer' && h[1]) return go(customerView, h[1]);
-  if (h[0] === 'admin' && isAdmin()) return go(adminView);
+  if (h[0] === 'admin' && isAdmin()) return go(adminView, h[1]);
   if (h[0] === 'group' && isAdmin()) return go(groupView, h[1]);
   if (isAdmin()) return go(groupView);
   const s = myStores()[0]; if (s) { location.hash = `#/store/${s.code}`; return; }
@@ -331,7 +378,7 @@ async function groupView(weekSel) {
   const gT = aovStats(await ticketSeries(stores.map(s => s.id)), wk);
   for (const x of per) x.av = aovStats(await ticketSeries([x.s.id]), wk);
   app.innerHTML = `
-  <div class="row" style="margin-bottom:12px"><h2 style="margin:0;font-size:18px">${esc(S.org.name)}: group</h2><span class="sp"></span>${weekPicker(group, wk, v => groupView(v))}</div>
+  ${pageHead(S.org.name, 'Group', weekPicker(group, wk, v => groupView(v)))}
   <div class="tiles">
     <div class="tile"><div class="l">Retail sales</div><div class="v">${money(tot.retail)}</div><div class="d">${pctTxt(pct(tot.retail, g.avg12))} vs 12-wk avg · ${pctTxt(g.ly ? pct(tot.retail, g.ly.retail) : null)} vs LY</div></div>
     <div class="tile"><div class="l">Commercial (on account)</div><div class="v">${money(tot.commercial)}</div><div class="d">${pctTxt(pct(tot.commercial, gc.avg12))} vs 12-wk avg</div></div>
@@ -410,7 +457,7 @@ async function storeView(code, weekSel) {
   const mlist = [...mm.values()].sort((a, b) => a.m < b.m ? 1 : -1).slice(0, 13);
   const asOf = (best.data || [])[0] ? null : null;
   app.innerHTML = `
-  <div class="row" style="margin-bottom:12px"><h2 style="margin:0;font-size:18px">${esc(store.name)}</h2><span class="sp"></span>${weekPicker(ser, wk, v => storeView(code, v))}</div>
+  ${pageHead('Store', esc(store.name), weekPicker(ser, wk, v => storeView(code, v)))}
   <div class="tiles">
     <div class="tile"><div class="l">Retail sales</div><div class="v">${money(c.retail)}</div><div class="d">${pctTxt(pct(c.retail, st.avg12))} vs 12-wk avg (${money(st.avg12)})</div></div>
     <div class="tile"><div class="l">vs same week last year</div><div class="v">${st.ly ? money(st.ly.retail) : '–'}</div><div class="d">${pctTxt(st.ly ? pct(c.retail, st.ly.retail) : null)}</div></div>
@@ -454,7 +501,7 @@ function custTable(title, rows, cols, heads) {
 /* ---------- customers ---------- */
 async function customersView(q) {
   const ids = myStores().map(s => s.id);
-  app.innerHTML = `<div class="card"><h2>Customers</h2>
+  app.innerHTML = `${pageHead('', 'Customers')}<div class="card"><h2>Find a customer</h2>
     <form id="cs" class="row"><input id="cq" placeholder="Name, mobile or email" value="${esc(q)}" style="flex:1;min-width:220px">
     <select id="cst"><option value="">All my stores</option>${myStores().map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
     <select id="ctier"><option value="">Any tier</option>${['VIP', 'Regular', 'Casual', 'Lapsed'].map(t => `<option>${t}</option>`).join('')}</select>
@@ -511,7 +558,7 @@ async function customerView(id) {
   const gaps = []; const ds = (orders || []).map(o => o.order_date).sort();
   for (let i = 1; i < ds.length; i++) gaps.push((new Date(ds[i]) - new Date(ds[i - 1])) / 864e5);
   const typical = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : null;
-  app.innerHTML = `<div class="row" style="margin-bottom:12px"><a href="#/customers">‹ Customers</a></div>
+  app.innerHTML = `<div class="row" style="margin-bottom:12px"><a href="#/customers">‹ Back to customers</a></div>
   <div class="card"><h2>${esc(c.full_name)} ${c.is_commercial ? '<span class="chip">account customer</span>' : ''} <small>${esc(S.stores.find(s => s.id === c.store_id)?.name || '')} · ${c.tier}</small></h2>
     <div class="tiles">
       <div class="tile"><div class="l">Lifetime spend</div><div class="v">${money(c.lifetime_spend)}</div><div class="d mu">${num(c.order_count)} orders since ${fmtD(c.first_order)}</div></div>
@@ -540,8 +587,8 @@ async function uploadView() {
   const { data: ups } = await sb.from('uploads').select('*').eq('org_id', S.org.id).order('created_at', { ascending: false }).limit(25);
   const { data: aliases } = await sb.from('store_aliases').select('*').eq('org_id', S.org.id);
   S.aliases = aliases || [];
-  app.innerHTML = `
-  <div class="card"><h2>Upload My Clean POS exports</h2>
+  app.innerHTML = `${pageHead('', 'Upload')}
+  <div class="card"><h2>My Clean POS exports</h2>
     <p>Drop in any number of <b>Sales Incoming</b> or <b>Customer Orders</b> Excel files. Each file is checked, then loaded. Loading the same file twice is safe: it replaces what was there, it never adds twice.</p>
     <div class="drop" id="drop">Drop .xlsx files here, or <label style="display:inline;color:var(--blue);cursor:pointer"><input type="file" id="fi" accept=".xlsx,.xls" multiple hidden>choose files</label></div>
     <div class="log" id="log"></div>
@@ -901,27 +948,26 @@ async function pushUpload(kind, fileName, grain, from, to, stores, rows, fn, say
 }
 
 /* ---------- admin ---------- */
-async function adminView() {
+async function adminView(sub = 'people') {
+  if (!ADMIN_TABS.some(t => t[0] === sub)) sub = 'people';
   const svc = S.services.slice().sort((a, b) => a.channel.localeCompare(b.channel) || a.name.localeCompare(b.name));
-  app.innerHTML = `
-  <div class="card" id="people"></div>
-
+  const head = pageHead('Admin', ADMIN_TABS.find(t => t[0] === sub)[1]);
+  if (sub === 'people') { app.innerHTML = `${head}<div class="card" id="people"></div>`; return peopleCard($('#people')); }
+  if (sub === 'discounts') { app.innerHTML = `${head}<div class="card" id="discountTypes"></div>`; return discountTypesCard($('#discountTypes')); }
+  if (sub === 'reports') { app.innerHTML = `${head}<div class="card" id="reports"></div>`; return reportsCard($('#reports')); }
+  if (sub === 'locks') { app.innerHTML = `${head}<div class="card" id="locks"></div>`; return locksCard($('#locks')); }
+  if (sub === 'stores') {
+    app.innerHTML = `${head}<div class="card"><h2>Stores</h2><div class="scroll"><table><tr><th>Store</th><th>Type</th><th>Active</th></tr>
+    ${S.stores.map(s => `<tr><td>${esc(s.name)}</td><td>${s.channel}</td><td>${s.active ? 'Yes' : 'No'}</td></tr>`).join('')}</table></div>
+    ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>`;
+    return;
+  }
+  app.innerHTML = `${head}
   <div class="card"><h2>Services <small>which POS services count as retail, commercial or restoration</small></h2><div class="scroll"><table>
     <tr><th>Service</th><th>Counts as</th><th>Marketing group</th></tr>
     ${svc.map(s => `<tr><td>${esc(s.name)}</td><td><select data-svc="${esc(s.name)}">${['retail', 'commercial', 'restoration', 'other'].map(c => `<option ${c === s.channel ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
       <td><select data-grp="${esc(s.name)}"><option value="">none</option>${Object.entries(SVC_GROUPS).map(([g, n]) => `<option value="${g}" ${g === s.offer_group ? 'selected' : ''}>${n}</option>`).join('')}</select></td></tr>`).join('')}
-  </table></div><p class="note">"Other" is left out of every total (tickets, re-dos, zero lines). Marketing group decides which service a customer counts as using for targeted offers (DRAFT, set 28 Nov 2026); profiles rebuild at the next service upload. Changes apply straight away.</p></div>
-
-  <div class="card"><h2>Stores</h2><div class="scroll"><table><tr><th>Store</th><th>Type</th><th>Active</th></tr>
-    ${S.stores.map(s => `<tr><td>${esc(s.name)}</td><td>${s.channel}</td><td>${s.active ? 'Yes' : 'No'}</td></tr>`).join('')}</table></div>
-    ${S.platform ? '<p class="note">New business for the consulting arm: ask Claude to add it (one org, its stores and its POS names).</p>' : ''}</div>
-  <div class="card" id="discountTypes"></div>
-  <div class="card" id="reports"></div>
-  <div class="card" id="locks"></div>`;
-  peopleCard($('#people'));
-  discountTypesCard($('#discountTypes'));
-  reportsCard($('#reports'));
-  locksCard($('#locks'));
+  </table></div><p class="note">"Other" is left out of every total (tickets, re-dos, zero lines). Marketing group decides which service a customer counts as using for targeted offers (DRAFT, set 28 Nov 2026); profiles rebuild at the next service upload. Changes apply straight away.</p></div>`;
   app.querySelectorAll('[data-grp]').forEach(el => el.onchange = async () => {
     const { error } = await sb.from('services').update({ offer_group: el.value || null }).eq('org_id', S.org.id).eq('name', el.dataset.grp);
     if (error) alert(error.message); else S.services.find(s => s.name === el.dataset.grp).offer_group = el.value || null;

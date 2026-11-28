@@ -15,11 +15,10 @@ async function marketingView(tab = 'offers') {
   const asof = (await sb.from('orgs').select('orders_as_of').eq('id', S.org.id).single()).data?.orders_as_of;
   const stale = !asof || (Date.now() - new Date(asof)) / 864e5 > 10;
   app.innerHTML = `
-  <div class="row" style="margin-bottom:10px"><h2 style="margin:0;font-size:18px">Marketing</h2><span class="sp"></span>
+  <div class="row ph"><h1 class="pt"><small>Marketing</small>${esc((MK_TABS.find(t => t[0] === tab) || MK_TABS[1])[1])}</h1><span class="sp"></span>
     <span class="chip" style="${set?.mode === 'live' ? 'background:#e6f4ea;color:#127a3d' : set?.mode === 'test' ? 'background:#fff4e5;color:#b54708' : 'background:#fdecea;color:#b42318'}">Sending: ${set?.mode === 'live' ? 'LIVE' : set?.mode === 'test' ? 'test number only' : 'OFF'}</span>
     <span class="chip ${stale ? '' : ''}" style="${stale ? 'background:#fdecea;color:#b42318' : ''}">Orders loaded to ${fmtD(asof)}</span></div>
   ${stale ? '<div class="card" style="border-color:#f3c5c0"><b>Order data is out of date.</b> The automated flows and the monthly draw wait until Customer Orders are uploaded to within the last 10 days, so they never act on old information.</div>' : ''}
-  <div class="row" style="margin-bottom:12px">${MK_TABS.map(([k, t]) => `<a class="btn ${k === tab ? '' : 'ghost'}" style="padding:5px 10px" href="#/marketing/${k}">${t}</a>`).join('')}</div>
   <div id="mk"></div>`;
   const fn = { offers: mkOffers, flows: mkFlows, loyalty: mkLoyalty, referrals: mkReferrals, reviews: mkReviews, campaigns: mkCampaigns, test: mkTest, programs: mkPrograms, results: mkResults, report: mkReport, checks: mkChecks, optouts: mkOptouts, templates: mkTemplates, settings: mkSettings }[tab] || mkOffers;
   await fn($('#mk'));

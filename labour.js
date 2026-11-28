@@ -41,9 +41,8 @@ const lastSunday = () => { const d = new Date(); d.setDate(d.getDate() - ((d.get
 
 async function labourView(tab = 'plant', arg) {
   app.innerHTML = `
-  <div class="row" style="margin-bottom:10px"><h2 style="margin:0;font-size:18px">Labour</h2><span class="sp"></span>
+  <div class="row ph"><h1 class="pt"><small>Labour</small>${esc(tab === 'role' ? 'Role card' : (LB_TABS.find(t => t[0] === tab) || LB_TABS[0])[1])}</h1><span class="sp"></span>
     <span class="note">Employment Hero, pulled daily at 6:15am. Cost = wages + super. WorkCover not included.</span></div>
-  <div class="row" style="margin-bottom:12px">${LB_TABS.map(([k, t]) => `<a class="btn ${k === tab || (k === 'org' && tab === 'role') ? '' : 'ghost'}" style="padding:5px 10px" href="#/labour/${k}">${t}</a>`).join('')}</div>
   <div id="lb"><p class="note">Loading…</p></div>`;
   const fn = { plant: lbPlant, stores: lbStores, repairs: lbRepairs, roster: lbRoster, drdrapes: lbDrd, sections: lbSections, org: lbOrg, role: lbRole }[tab] || lbPlant;
   await fn($('#lb'), arg);
