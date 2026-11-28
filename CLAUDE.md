@@ -164,3 +164,5 @@ comparisons are like for like; DRYZ at Butler (ended Nov 2026) is the first. `ap
 order_lines (Sales Incoming basis) where the week is loaded, else Customer Orders. The store shows as "The Butler excl.
 DRYZ". Services this week still include DRYZ's lines until it stops trading. Resend key ("hangr-ops store reports",
 send-only, hangr.au only) created 28 Nov 2026 and stored in `app.report_settings`; six test emails sent to David that day.
+
+**Address:** https://ops.hangr.au since 28 Nov 2026 (CNAME file + GoDaddy CNAME `ops`). Logins are per address, so everyone signs in again once. Scripts are plain globals across app.js, marketing.js, labour.js, roles.js, accounts.js and growth.js, so a top-level const can clash between files (DOW did, 28 Nov): before pushing, concatenate all six and run `node --check`.

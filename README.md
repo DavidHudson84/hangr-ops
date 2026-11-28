@@ -2,7 +2,7 @@
 
 Store-by-store sales and customer platform for Master Dry Cleaners, built to take other businesses later.
 
-- Live: https://davidhudson84.github.io/hangr-ops/
+- Live: https://ops.hangr.au/
 - Backend: Supabase project `hangr-ops` (`pswvmkrtnantiwjoexyq`, Sydney).
 - A push to `main` is a live deploy (GitHub Pages).
 
